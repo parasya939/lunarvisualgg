@@ -1,0 +1,791 @@
+--[[ ===========================================================================
+	L U N A R   E L Y S I U M   ·   PREMIUM EXECUTION HUD
+	----------------------------------------------------------------------------
+	Watermark : lunar elysium
+	Theme     : moonlit violet · aurora sheets · starfield · glass panel
+	Behaviour : 3-minute ramp, locks permanently at 98%
+	Install   : place inside a LocalScript in "ReplicatedFirst"
+	=========================================================================== ]]
+
+local Players         = game:GetService("Players")
+local TweenService    = game:GetService("TweenService")
+local ReplicatedFirst = game:GetService("ReplicatedFirst")
+local RunService      = game:GetService("RunService")
+
+local player    = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local playerGui = player:WaitForChild("PlayerGui", 10)
+
+if not game:IsLoaded() then
+	pcall(function()
+		ReplicatedFirst:RemoveDefaultLoadingScreen()
+	end)
+end
+
+-- ============================================================================
+-- 0 · THEME & BUILDERS
+-- ============================================================================
+local Theme = {
+	Void   = Color3.fromRGB(6, 5, 14),
+	Deep   = Color3.fromRGB(14, 12, 30),
+	Panel  = Color3.fromRGB(18, 16, 34),
+	Moon   = Color3.fromRGB(226, 214, 255),
+	Lilac  = Color3.fromRGB(167, 139, 250),
+	Violet = Color3.fromRGB(124, 92, 246),
+	Orchid = Color3.fromRGB(196, 132, 252),
+	Aqua   = Color3.fromRGB(125, 211, 252),
+	Gold   = Color3.fromRGB(250, 214, 137),
+	Rose   = Color3.fromRGB(251, 113, 133),
+	Muted  = Color3.fromRGB(148, 143, 178),
+}
+
+local function new(class, props, parent)
+	local inst = Instance.new(class)
+	for key, value in pairs(props) do
+		inst[key] = value
+	end
+	inst.Parent = parent
+	return inst
+end
+
+local function corner(parent, radius)
+	return new("UICorner", { CornerRadius = UDim.new(0, radius) }, parent)
+end
+
+local function round(parent)
+	return new("UICorner", { CornerRadius = UDim.new(1, 0) }, parent)
+end
+
+local function stroke(parent, color, thickness, transparency)
+	return new("UIStroke", {
+		Color = color,
+		Thickness = thickness,
+		Transparency = transparency or 0,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, parent)
+end
+
+local function gradient(parent, keypoints, rotation, transparency)
+	return new("UIGradient", {
+		Color = ColorSequence.new(keypoints),
+		Rotation = rotation or 0,
+		Transparency = transparency or NumberSequence.new(0),
+	}, parent)
+end
+
+-- fades a gradient out at both ends so an element dissolves into the backdrop
+local function feather(inner, outer)
+	return NumberSequence.new({
+		NumberSequenceKeypoint.new(0, outer),
+		NumberSequenceKeypoint.new(0.5, inner),
+		NumberSequenceKeypoint.new(1, outer),
+	})
+end
+
+local function tween(inst, duration, props, style, direction)
+	local info = TweenInfo.new(
+		duration,
+		style or Enum.EasingStyle.Quint,
+		direction or Enum.EasingDirection.Out
+	)
+	local playing = TweenService:Create(inst, info, props)
+	playing:Play()
+	return playing
+end
+
+-- ============================================================================
+-- 1 · CANVAS & ATMOSPHERE
+-- ============================================================================
+local screenGui = new("ScreenGui", {
+	Name = "LunarElysiumLoader",
+	IgnoreGuiInset = true,
+	ResetOnSpawn = false,
+	DisplayOrder = 99999,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+
+local backdrop = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = Theme.Void,
+	BorderSizePixel = 0,
+}, screenGui)
+
+local baseGradient = gradient(backdrop, {
+	ColorSequenceKeypoint.new(0.00, Theme.Void),
+	ColorSequenceKeypoint.new(0.42, Theme.Deep),
+	ColorSequenceKeypoint.new(0.58, Color3.fromRGB(24, 17, 48)),
+	ColorSequenceKeypoint.new(1.00, Theme.Void),
+}, 25)
+
+-- CurrentCamera can still be nil this early in ReplicatedFirst.
+task.spawn(function()
+	local camera = workspace.CurrentCamera
+	if not camera then
+		camera = workspace:GetPropertyChangedSignal("CurrentCamera"):Wait()
+			and workspace.CurrentCamera
+	end
+	if camera then
+		local blur = new("BlurEffect", { Size = 0 }, camera)
+		tween(blur, 1.6, { Size = 26 }, Enum.EasingStyle.Sine)
+	end
+end)
+
+-- Aurora sheets: three huge soft blobs that drift and breathe behind the panel.
+local auroraLayer = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+}, backdrop)
+
+local auroras = {}
+local auroraSpecs = {
+	{ color = Theme.Violet, w = 1.10, h = 0.62, y = 0.20, drift = 0.10, alpha = 0.88 },
+	{ color = Theme.Orchid, w = 0.90, h = 0.55, y = 0.78, drift = -0.07, alpha = 0.90 },
+	{ color = Theme.Aqua,   w = 0.70, h = 0.42, y = 0.50, drift = 0.14, alpha = 0.93 },
+}
+
+for index, spec in ipairs(auroraSpecs) do
+	local blob = new("Frame", {
+		Size = UDim2.fromScale(spec.w, spec.h),
+		Position = UDim2.fromScale(0.5, spec.y),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = spec.color,
+		BackgroundTransparency = spec.alpha,
+		BorderSizePixel = 0,
+		Rotation = index * 14,
+	}, auroraLayer)
+	round(blob)
+	gradient(blob, {
+		ColorSequenceKeypoint.new(0, spec.color),
+		ColorSequenceKeypoint.new(1, spec.color),
+	}, 90, feather(0.1, 1))
+
+	table.insert(auroras, {
+		frame = blob,
+		spec = spec,
+		phase = index * 1.7,
+	})
+end
+
+-- Edge fade so the top and bottom of the screen fall away into the dark.
+for _, edge in ipairs({ 0, 1 }) do
+	local fade = new("Frame", {
+		Size = UDim2.fromScale(1, 0.42),
+		Position = UDim2.fromScale(0.5, edge),
+		AnchorPoint = Vector2.new(0.5, edge),
+		BackgroundColor3 = Theme.Void,
+		BorderSizePixel = 0,
+	}, backdrop)
+	gradient(fade, {
+		ColorSequenceKeypoint.new(0, Theme.Void),
+		ColorSequenceKeypoint.new(1, Theme.Void),
+	}, edge == 0 and 90 or 270, NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.18),
+		NumberSequenceKeypoint.new(1, 1),
+	}))
+end
+
+-- ============================================================================
+-- 2 · STARFIELD
+-- ============================================================================
+local starLayer = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+}, backdrop)
+
+local stars = {}
+for i = 1, 110 do
+	local scale = math.random(1, 3)
+	local star = new("Frame", {
+		Size = UDim2.fromOffset(scale, scale),
+		Position = UDim2.fromScale(math.random(), math.random()),
+		BackgroundColor3 = (i % 9 == 0) and Theme.Aqua or Theme.Moon,
+		BackgroundTransparency = math.random(35, 85) / 100,
+		BorderSizePixel = 0,
+	}, starLayer)
+	round(star)
+
+	table.insert(stars, {
+		frame = star,
+		base = star.BackgroundTransparency,
+		phase = math.random() * math.pi * 2,
+		rate = 0.5 + math.random() * 1.9,
+	})
+end
+
+-- ============================================================================
+-- 3 · MOON HALO & ORBIT RINGS
+-- ============================================================================
+local halo = new("Frame", {
+	Size = UDim2.fromOffset(470, 470),
+	Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Theme.Violet,
+	BackgroundTransparency = 0.88,
+	BorderSizePixel = 0,
+}, backdrop)
+round(halo)
+gradient(halo, {
+	ColorSequenceKeypoint.new(0.0, Theme.Orchid),
+	ColorSequenceKeypoint.new(0.5, Theme.Violet),
+	ColorSequenceKeypoint.new(1.0, Theme.Aqua),
+}, 45)
+
+local rings = {}
+for i = 1, 3 do
+	local span = 340 + i * 78
+	local ring = new("Frame", {
+		Size = UDim2.fromOffset(span, span),
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1,
+	}, backdrop)
+	round(ring)
+
+	local ringStroke = stroke(ring, Theme.Lilac, 1, 0.74 + i * 0.06)
+	local ringGradient = gradient(ringStroke, {
+		ColorSequenceKeypoint.new(0.0, Theme.Orchid),
+		ColorSequenceKeypoint.new(0.5, Theme.Aqua),
+		ColorSequenceKeypoint.new(1.0, Theme.Orchid),
+	}, i * 40)
+
+	table.insert(rings, {
+		gradient = ringGradient,
+		speed = (i % 2 == 0) and -(10 + i * 5) or (14 + i * 6),
+	})
+end
+
+-- Drifting motes: slow rising dust that gives the scene depth.
+local moteLayer = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+}, backdrop)
+
+local motePalette = { Theme.Moon, Theme.Lilac, Theme.Orchid, Theme.Aqua }
+
+local function spawnMote()
+	local size = math.random(2, 5)
+	local mote = new("Frame", {
+		Size = UDim2.fromOffset(size, size),
+		Position = UDim2.new(math.random(), 0, 1.08, 0),
+		BackgroundColor3 = motePalette[math.random(#motePalette)],
+		BackgroundTransparency = math.random(25, 65) / 100,
+		BorderSizePixel = 0,
+	}, moteLayer)
+	round(mote)
+
+	local sway = math.random(-14, 14) / 100
+	local travel = math.random(60, 95) / 10
+
+	tween(mote, travel, {
+		Position = UDim2.new(mote.Position.X.Scale + sway, 0, -0.1, 0),
+		BackgroundTransparency = 1,
+	}, Enum.EasingStyle.Linear)
+
+	task.delay(travel + 0.2, function()
+		mote:Destroy()
+	end)
+end
+
+-- ============================================================================
+-- 4 · GLASS PANEL
+-- ============================================================================
+local PANEL_W, PANEL_H = 400, 300
+
+local panel = new("Frame", {
+	Size = UDim2.fromOffset(PANEL_W, PANEL_H),
+	Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Theme.Panel,
+	BackgroundTransparency = 0.1,
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+}, backdrop)
+corner(panel, 18)
+gradient(panel, {
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(32, 27, 58)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 10, 24)),
+}, 115)
+
+local panelStroke = stroke(panel, Theme.Lilac, 1.4, 0.32)
+local panelStrokeGradient = gradient(panelStroke, {
+	ColorSequenceKeypoint.new(0.00, Theme.Orchid),
+	ColorSequenceKeypoint.new(0.35, Theme.Aqua),
+	ColorSequenceKeypoint.new(0.70, Theme.Violet),
+	ColorSequenceKeypoint.new(1.00, Theme.Orchid),
+}, 0)
+
+-- Hairline highlight along the top lip of the panel.
+local hairline = new("Frame", {
+	Size = UDim2.new(0.82, 0, 0, 1),
+	Position = UDim2.fromScale(0.5, 0),
+	AnchorPoint = Vector2.new(0.5, 0),
+	BackgroundColor3 = Theme.Moon,
+	BorderSizePixel = 0,
+}, panel)
+gradient(hairline, {
+	ColorSequenceKeypoint.new(0, Theme.Moon),
+	ColorSequenceKeypoint.new(1, Theme.Moon),
+}, 0, feather(0.45, 1))
+
+-- ============================================================================
+-- 5 · BRAND HEADER
+-- ============================================================================
+local header = new("Frame", {
+	Size = UDim2.new(1, -28, 0, 22),
+	Position = UDim2.fromOffset(14, 13),
+	BackgroundTransparency = 1,
+}, panel)
+
+local moonGlyph = new("Frame", {
+	Size = UDim2.fromOffset(11, 11),
+	Position = UDim2.fromScale(0, 0.5),
+	AnchorPoint = Vector2.new(0, 0.5),
+	BackgroundColor3 = Theme.Moon,
+	BorderSizePixel = 0,
+}, header)
+round(moonGlyph)
+gradient(moonGlyph, {
+	ColorSequenceKeypoint.new(0, Theme.Moon),
+	ColorSequenceKeypoint.new(1, Theme.Lilac),
+}, 60)
+
+-- The bite out of the crescent: a panel-coloured disc offset over the moon.
+local crescentCut = new("Frame", {
+	Size = UDim2.fromOffset(8, 8),
+	Position = UDim2.fromScale(0.72, 0.28),
+	BackgroundColor3 = Color3.fromRGB(26, 22, 47),
+	BorderSizePixel = 0,
+}, moonGlyph)
+round(crescentCut)
+
+local wordmark = new("TextLabel", {
+	Size = UDim2.new(0, 200, 1, 0),
+	Position = UDim2.fromOffset(19, 0),
+	BackgroundTransparency = 1,
+	Text = "lunar elysium",
+	Font = Enum.Font.GothamBold,
+	TextSize = 12,
+	TextColor3 = Theme.Moon,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+local wordmarkGradient = gradient(wordmark, {
+	ColorSequenceKeypoint.new(0.00, Theme.Moon),
+	ColorSequenceKeypoint.new(0.45, Theme.Orchid),
+	ColorSequenceKeypoint.new(0.90, Theme.Aqua),
+	ColorSequenceKeypoint.new(1.00, Theme.Moon),
+}, 0)
+
+local chip = new("Frame", {
+	Size = UDim2.fromOffset(58, 17),
+	Position = UDim2.fromScale(1, 0.5),
+	AnchorPoint = Vector2.new(1, 0.5),
+	BackgroundColor3 = Theme.Violet,
+	BackgroundTransparency = 0.82,
+	BorderSizePixel = 0,
+}, header)
+corner(chip, 6)
+stroke(chip, Theme.Lilac, 1, 0.62)
+
+new("TextLabel", {
+	Size = UDim2.fromScale(1, 1),
+	BackgroundTransparency = 1,
+	Text = "PREMIUM",
+	Font = Enum.Font.GothamBold,
+	TextSize = 8,
+	TextColor3 = Theme.Lilac,
+}, chip)
+
+-- ============================================================================
+-- 6 · AVATAR & ORBIT
+-- ============================================================================
+local avatarHub = new("Frame", {
+	Size = UDim2.fromOffset(112, 112),
+	Position = UDim2.fromScale(0.5, 0.30),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+}, panel)
+
+local orbitRing = new("Frame", {
+	Size = UDim2.fromScale(1, 1),
+	Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+}, avatarHub)
+round(orbitRing)
+local orbitStroke = stroke(orbitRing, Theme.Lilac, 1, 0.55)
+local orbitGradient = gradient(orbitStroke, {
+	ColorSequenceKeypoint.new(0.0, Theme.Aqua),
+	ColorSequenceKeypoint.new(0.5, Theme.Orchid),
+	ColorSequenceKeypoint.new(1.0, Theme.Aqua),
+}, 0)
+
+-- Satellite dot riding the orbit ring.
+local satellite = new("Frame", {
+	Size = UDim2.fromOffset(6, 6),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Theme.Moon,
+	BorderSizePixel = 0,
+}, avatarHub)
+round(satellite)
+stroke(satellite, Theme.Aqua, 2, 0.5)
+
+local avatarFrame = new("Frame", {
+	Size = UDim2.fromOffset(84, 84),
+	Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Color3.fromRGB(28, 24, 50),
+	BorderSizePixel = 0,
+}, avatarHub)
+round(avatarFrame)
+
+local avatarStroke = stroke(avatarFrame, Theme.Orchid, 2, 0.1)
+local avatarStrokeGradient = gradient(avatarStroke, {
+	ColorSequenceKeypoint.new(0.0, Theme.Orchid),
+	ColorSequenceKeypoint.new(0.5, Theme.Aqua),
+	ColorSequenceKeypoint.new(1.0, Theme.Orchid),
+}, 0)
+
+local avatarImage = new("ImageLabel", {
+	Size = UDim2.fromScale(0.9, 0.9),
+	Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+	ImageTransparency = 1,
+}, avatarFrame)
+round(avatarImage)
+
+task.spawn(function()
+	local ok, thumbnail = pcall(function()
+		return Players:GetUserThumbnailAsync(
+			player.UserId,
+			Enum.ThumbnailType.HeadShot,
+			Enum.ThumbnailSize.Size150x150
+		)
+	end)
+	if ok and thumbnail then
+		avatarImage.Image = thumbnail
+		tween(avatarImage, 0.6, { ImageTransparency = 0 }, Enum.EasingStyle.Sine)
+	end
+end)
+
+local nameLabel = new("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 16),
+	Position = UDim2.fromScale(0.5, 0.52),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+	Text = "@" .. player.Name,
+	Font = Enum.Font.GothamMedium,
+	TextSize = 11,
+	TextColor3 = Theme.Moon,
+	TextTransparency = 0.25,
+}, panel)
+
+-- ============================================================================
+-- 7 · TYPOGRAPHY
+-- ============================================================================
+local warningLabel = new("TextLabel", {
+	Size = UDim2.new(0.84, 0, 0, 28),
+	Position = UDim2.fromScale(0.5, 0.605),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+	Text = "PLEASE WAIT UNTIL LOADING COMPLETES TO RUN THE SCRIPT",
+	Font = Enum.Font.GothamBlack,
+	TextSize = 11,
+	TextColor3 = Theme.Gold,
+	TextWrapped = true,
+	LineHeight = 1.15,
+}, panel)
+local warningStroke = stroke(warningLabel, Color3.fromRGB(0, 0, 0), 1.6, 0.45)
+warningStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+
+local statusRow = new("Frame", {
+	Size = UDim2.new(0.84, 0, 0, 14),
+	Position = UDim2.fromScale(0.5, 0.70),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+}, panel)
+
+local statusLabel = new("TextLabel", {
+	Size = UDim2.new(0.75, 0, 1, 0),
+	BackgroundTransparency = 1,
+	Text = "Aligning lunar constellations...",
+	Font = Enum.Font.GothamMedium,
+	TextSize = 10,
+	TextColor3 = Theme.Muted,
+	TextXAlignment = Enum.TextXAlignment.Left,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+}, statusRow)
+
+local percentLabel = new("TextLabel", {
+	Size = UDim2.new(0.25, 0, 1, 0),
+	Position = UDim2.fromScale(1, 0),
+	AnchorPoint = Vector2.new(1, 0),
+	BackgroundTransparency = 1,
+	Text = "0%",
+	Font = Enum.Font.Code,
+	TextSize = 13,
+	TextColor3 = Theme.Aqua,
+	TextXAlignment = Enum.TextXAlignment.Right,
+}, statusRow)
+
+-- ============================================================================
+-- 8 · PROGRESS BAR
+-- ============================================================================
+local barTrack = new("Frame", {
+	Size = UDim2.new(0.84, 0, 0, 6),
+	Position = UDim2.fromScale(0.5, 0.775),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Color3.fromRGB(30, 27, 52),
+	BorderSizePixel = 0,
+}, panel)
+round(barTrack)
+stroke(barTrack, Theme.Lilac, 1, 0.85)
+
+local barFill = new("Frame", {
+	Size = UDim2.new(0, 0, 1, 0),
+	BackgroundColor3 = Theme.Orchid,
+	BorderSizePixel = 0,
+	ClipsDescendants = true,
+}, barTrack)
+round(barFill)
+local barFillGradient = gradient(barFill, {
+	ColorSequenceKeypoint.new(0.0, Theme.Violet),
+	ColorSequenceKeypoint.new(0.5, Theme.Orchid),
+	ColorSequenceKeypoint.new(1.0, Theme.Aqua),
+}, 0)
+
+-- Travelling highlight inside the fill.
+local barShimmer = new("Frame", {
+	Size = UDim2.new(0, 46, 1, 0),
+	Position = UDim2.new(-0.5, 0, 0, 0),
+	BackgroundColor3 = Theme.Moon,
+	BorderSizePixel = 0,
+}, barFill)
+gradient(barShimmer, {
+	ColorSequenceKeypoint.new(0, Theme.Moon),
+	ColorSequenceKeypoint.new(1, Theme.Moon),
+}, 0, feather(0.55, 1))
+
+task.spawn(function()
+	while barShimmer.Parent do
+		barShimmer.Position = UDim2.new(-0.5, 0, 0, 0)
+		tween(barShimmer, 1.5, { Position = UDim2.new(1.1, 0, 0, 0) },
+			Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+		task.wait(2.3)
+	end
+end)
+
+-- Glow that rides the leading edge of the fill.
+local barTip = new("Frame", {
+	Size = UDim2.fromOffset(14, 14),
+	Position = UDim2.new(0, 0, 0.5, 0),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Theme.Aqua,
+	BackgroundTransparency = 0.4,
+	BorderSizePixel = 0,
+	Visible = false,
+}, barTrack)
+round(barTip)
+
+local miniLabel = new("TextLabel", {
+	Size = UDim2.new(0.84, 0, 0, 14),
+	Position = UDim2.fromScale(0.5, 0.855),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+	Text = "LOADING",
+	Font = Enum.Font.GothamBold,
+	TextSize = 9,
+	TextColor3 = Theme.Lilac,
+	TextTransparency = 0.2,
+}, panel)
+
+local footerLabel = new("TextLabel", {
+	Size = UDim2.new(0.9, 0, 0, 14),
+	Position = UDim2.fromScale(0.5, 0.94),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1,
+	Text = "Does not support alt accounts",
+	Font = Enum.Font.Code,
+	TextSize = 10,
+	TextColor3 = Theme.Aqua,
+	TextTransparency = 0.25,
+}, panel)
+
+-- ============================================================================
+-- 9 · ANIMATION DRIVER
+-- ============================================================================
+local clockStart = os.clock()
+
+RunService.Heartbeat:Connect(function(delta)
+	local t = os.clock() - clockStart
+
+	if math.random() < 0.07 then
+		spawnMote()
+	end
+
+	-- twinkling stars
+	for _, star in ipairs(stars) do
+		local flicker = (math.sin(t * star.rate + star.phase) + 1) / 2
+		star.frame.BackgroundTransparency = math.clamp(star.base - flicker * 0.35, 0, 1)
+	end
+
+	-- aurora sheets breathing and sliding
+	for _, aurora in ipairs(auroras) do
+		local wave = math.sin(t * aurora.spec.drift * 3 + aurora.phase)
+		aurora.frame.Position = UDim2.fromScale(0.5 + wave * 0.09, aurora.spec.y)
+		aurora.frame.BackgroundTransparency = aurora.spec.alpha - wave * 0.05
+		aurora.frame.Rotation = aurora.frame.Rotation + aurora.spec.drift * delta * 8
+	end
+
+	-- rotating rings and border gradients
+	for _, ring in ipairs(rings) do
+		ring.gradient.Rotation = (ring.gradient.Rotation + ring.speed * delta) % 360
+	end
+
+	baseGradient.Rotation = (baseGradient.Rotation + delta * 3) % 360
+	panelStrokeGradient.Rotation = (panelStrokeGradient.Rotation + delta * 34) % 360
+	avatarStrokeGradient.Rotation = (avatarStrokeGradient.Rotation + delta * 58) % 360
+	orbitGradient.Rotation = (orbitGradient.Rotation - delta * 40) % 360
+	wordmarkGradient.Offset = Vector2.new((t * 0.22) % 2 - 1, 0)
+
+	-- halo pulse
+	local pulse = (math.sin(t * 1.6) + 1) / 2
+	halo.BackgroundTransparency = 0.86 + pulse * 0.09
+	halo.Size = UDim2.fromOffset(450 + pulse * 46, 450 + pulse * 46)
+
+	-- satellite riding the orbit
+	local angle = t * 1.15
+	satellite.Position = UDim2.fromScale(
+		0.5 + math.cos(angle) * 0.5,
+		0.5 + math.sin(angle) * 0.5
+	)
+
+	-- breathing strokes
+	local breathe = (math.sin(t * 2.4) + 1) / 2
+	orbitStroke.Transparency = 0.45 + breathe * 0.3
+	panelStroke.Transparency = 0.24 + breathe * 0.22
+	barTip.BackgroundTransparency = 0.3 + breathe * 0.35
+end)
+
+-- ============================================================================
+-- 10 · INTRO
+-- ============================================================================
+panel.Size = UDim2.fromOffset(PANEL_W - 56, PANEL_H - 42)
+panel.BackgroundTransparency = 1
+tween(panel, 0.75, {
+	Size = UDim2.fromOffset(PANEL_W, PANEL_H),
+	BackgroundTransparency = 0.1,
+})
+
+local introTargets = {
+	{ inst = wordmark,      prop = "TextTransparency", to = 0,    delay = 0.10 },
+	{ inst = nameLabel,     prop = "TextTransparency", to = 0.25, delay = 0.18 },
+	{ inst = warningLabel,  prop = "TextTransparency", to = 0,    delay = 0.26 },
+	{ inst = statusLabel,   prop = "TextTransparency", to = 0,    delay = 0.34 },
+	{ inst = percentLabel,  prop = "TextTransparency", to = 0,    delay = 0.34 },
+	{ inst = miniLabel,     prop = "TextTransparency", to = 0.2,  delay = 0.42 },
+	{ inst = footerLabel,   prop = "TextTransparency", to = 0.25, delay = 0.50 },
+}
+
+for _, target in ipairs(introTargets) do
+	target.inst[target.prop] = 1
+	task.delay(target.delay, function()
+		tween(target.inst, 0.55, { [target.prop] = target.to }, Enum.EasingStyle.Sine)
+	end)
+end
+
+-- ============================================================================
+-- 11 · TIMING · 98% LOCK (3 MINUTES TOTAL)
+-- ============================================================================
+local phrases = {
+	"Aligning lunar constellations...",
+	"Decrypting core structural assets...",
+	"Bypassing security network checks...",
+	"Injecting operational system logic...",
+	"Finalizing execution environment...",
+}
+
+local TARGET_TIME = 105
+local startTime = os.time()
+
+local function setFill(progress, duration)
+	tween(barFill, duration, { Size = UDim2.new(progress, 0, 1, 0) },
+		Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	barTip.Visible = progress > 0.01
+	tween(barTip, duration, { Position = UDim2.new(progress, 0, 0.5, 0) },
+		Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+end
+
+while true do
+	local elapsed = os.time() - startTime
+	local progress = math.clamp(elapsed / TARGET_TIME, 0, 1)
+	local percent = math.floor(progress * 100)
+
+	if percent >= 98 then
+		setFill(0.98, 0.3)
+		percentLabel.Text = "98%"
+		break
+	end
+
+	setFill(progress, 0.5)
+	percentLabel.Text = percent .. "%"
+
+	if percent < 20 then
+		statusLabel.Text = phrases[1]
+	elseif percent < 45 then
+		statusLabel.Text = phrases[2]
+	elseif percent < 65 then
+		statusLabel.Text = phrases[3]
+	elseif percent < 85 then
+		statusLabel.Text = phrases[4]
+	else
+		statusLabel.Text = phrases[5]
+	end
+
+	task.wait(0.5)
+end
+
+-- ============================================================================
+-- 12 · PERMANENT 98% FREEZE STATE
+-- ============================================================================
+statusLabel.Text = "CRITICAL: DECRYPTION STALLED. VERIFYING FRAMEWORK KEYS..."
+statusLabel.TextColor3 = Theme.Rose
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 9
+
+percentLabel.Text = "98%"
+percentLabel.TextColor3 = Theme.Gold
+
+miniLabel.Text = "STALLED"
+miniLabel.TextColor3 = Theme.Rose
+
+-- These two carry a UIGradient, so recolour the gradient, not BackgroundColor3 /
+-- Color: the gradient wins and the red state would never show otherwise.
+barFill.BackgroundColor3 = Theme.Rose
+barFillGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0.0, Color3.fromRGB(190, 60, 90)),
+	ColorSequenceKeypoint.new(0.5, Theme.Rose),
+	ColorSequenceKeypoint.new(1.0, Theme.Gold),
+})
+
+barTip.BackgroundColor3 = Theme.Rose
+
+panelStroke.Color = Theme.Rose
+panelStrokeGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0.0, Theme.Rose),
+	ColorSequenceKeypoint.new(0.5, Theme.Gold),
+	ColorSequenceKeypoint.new(1.0, Theme.Rose),
+})
+
+-- Warning tint drifts to red and the frozen bar keeps a slow, uneasy pulse.
+tween(warningLabel, 1.2, { TextColor3 = Theme.Rose }, Enum.EasingStyle.Sine)
+
+task.spawn(function()
+	while barFill.Parent do
+		tween(barFill, 1.1, { BackgroundTransparency = 0.35 },
+			Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+		task.wait(1.2)
+		tween(barFill, 1.1, { BackgroundTransparency = 0 },
+			Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+		task.wait(1.2)
+	end
+end)
