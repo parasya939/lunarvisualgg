@@ -1,791 +1,1137 @@
---[[ ===========================================================================
-	L U N A R   E L Y S I U M   ·   PREMIUM EXECUTION HUD
-	----------------------------------------------------------------------------
-	Watermark : lunar elysium
-	Theme     : moonlit violet · aurora sheets · starfield · glass panel
-	Behaviour : 3-minute ramp, locks permanently at 98%
-	Install   : place inside a LocalScript in "ReplicatedFirst"
-	=========================================================================== ]]
-
-local Players         = game:GetService("Players")
-local TweenService    = game:GetService("TweenService")
-local ReplicatedFirst = game:GetService("ReplicatedFirst")
-local RunService      = game:GetService("RunService")
-
-local player    = Players.LocalPlayer or Players.PlayerAdded:Wait()
-local playerGui = player:WaitForChild("PlayerGui", 10)
-
-if not game:IsLoaded() then
-	pcall(function()
-		ReplicatedFirst:RemoveDefaultLoadingScreen()
-	end)
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
+assert(RunService:IsClient(), "SOLARA must run as a LocalScript on the client")
+local player = Players.LocalPlayer
+assert(player, "SOLARA requires a local player")
+local playerGui = player:WaitForChild("PlayerGui", 15)
+assert(playerGui, "PlayerGui did not become available within 15 seconds")
+local GUI_NAME = "SOLARA_Winter_v1"
+local ATTRIBUTE = "SOLARA_WINTER_LOCAL_V1"
+local old = playerGui:FindFirstChild(GUI_NAME)
+if old then
+    local shutdown = old:FindFirstChild("Shutdown")
+    if shutdown and shutdown:IsA("BindableEvent") then shutdown:Fire(); task.wait() end
+    if old.Parent then old:Destroy() end
 end
 
--- ============================================================================
--- 0 · THEME & BUILDERS
--- ============================================================================
-local Theme = {
-	Void   = Color3.fromRGB(6, 5, 14),
-	Deep   = Color3.fromRGB(14, 12, 30),
-	Panel  = Color3.fromRGB(18, 16, 34),
-	Moon   = Color3.fromRGB(226, 214, 255),
-	Lilac  = Color3.fromRGB(167, 139, 250),
-	Violet = Color3.fromRGB(124, 92, 246),
-	Orchid = Color3.fromRGB(196, 132, 252),
-	Aqua   = Color3.fromRGB(125, 211, 252),
-	Gold   = Color3.fromRGB(250, 214, 137),
-	Rose   = Color3.fromRGB(251, 113, 133),
-	Muted  = Color3.fromRGB(148, 143, 178),
+local legacyFX=playerGui:FindFirstChild("SOLARA_WinterFX_v1")
+if legacyFX then legacyFX:Destroy() end
+
+local alive = true
+local connections = {}
+local saveThread = nil
+local epoch = os.clock()
+local sessionErrors = 0
+local gui = Instance.new("ScreenGui")
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = false
+gui.DisplayOrder = 80
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+local shutdown = Instance.new("BindableEvent")
+shutdown.Name = "Shutdown"
+shutdown.Parent = gui
+
+local function connect(signal, fn)
+    local c = signal:Connect(fn)
+    connections[c] = true
+    return c
+end
+local function finite(n) return type(n) == "number" and n == n and math.abs(n) < math.huge end
+local function clamp(n, a, b) return math.max(a, math.min(b, n)) end
+local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+local registerSurface
+local function copy(v)
+    if type(v) ~= "table" then return v end
+    local out = {}; for k, value in pairs(v) do out[k] = copy(value) end; return out
+end
+local function make(class, props, parent)
+    local item = Instance.new(class)
+    for k, v in pairs(props or {}) do item[k] = v end
+    item.Parent = parent
+    if registerSurface then registerSurface(item,props or {}) end
+    return item
+end
+local function corner(item, radius) make("UICorner", {CornerRadius = UDim.new(0, radius or 12)}, item) end
+
+-- Configuration schema ------------------------------------------------------
+local THEMES = {
+    Frost = {accent=Color3.fromRGB(147,231,255),secondary=Color3.fromRGB(167,168,255),
+        surfaces={bg=Color3.fromRGB(17,24,40),panel=Color3.fromRGB(24,35,55),card=Color3.fromRGB(38,53,77),line=Color3.fromRGB(81,108,145),muted=Color3.fromRGB(162,187,215)},
+        colors={Color3.fromRGB(151,229,255),Color3.fromRGB(178,197,255),Color3.fromRGB(210,193,255),Color3.fromRGB(199,241,255),Color3.fromRGB(157,220,255)}},
+    Aurora = {accent=Color3.fromRGB(131,249,204),secondary=Color3.fromRGB(134,232,246),
+        surfaces={bg=Color3.fromRGB(15,31,32),panel=Color3.fromRGB(23,46,47),card=Color3.fromRGB(36,68,66),line=Color3.fromRGB(69,133,118),muted=Color3.fromRGB(162,211,195)},
+        colors={Color3.fromRGB(132,250,198),Color3.fromRGB(139,235,221),Color3.fromRGB(139,225,251),Color3.fromRGB(166,243,216),Color3.fromRGB(186,254,214)}},
+    Gold = {accent=Color3.fromRGB(255,214,131),secondary=Color3.fromRGB(255,179,135),
+        surfaces={bg=Color3.fromRGB(33,25,24),panel=Color3.fromRGB(49,38,34),card=Color3.fromRGB(73,57,43),line=Color3.fromRGB(143,112,70),muted=Color3.fromRGB(225,197,163)},
+        colors={Color3.fromRGB(255,217,139),Color3.fromRGB(255,192,135),Color3.fromRGB(255,226,174),Color3.fromRGB(255,234,195),Color3.fromRGB(255,205,135)}},
 }
-
-local function new(class, props, parent)
-	local inst = Instance.new(class)
-	for key, value in pairs(props) do
-		inst[key] = value
-	end
-	inst.Parent = parent
-	return inst
-end
-
-local function corner(parent, radius)
-	return new("UICorner", { CornerRadius = UDim.new(0, radius) }, parent)
-end
-
-local function round(parent)
-	return new("UICorner", { CornerRadius = UDim.new(1, 0) }, parent)
-end
-
-local function stroke(parent, color, thickness, transparency)
-	return new("UIStroke", {
-		Color = color,
-		Thickness = thickness,
-		Transparency = transparency or 0,
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-	}, parent)
-end
-
-local function gradient(parent, keypoints, rotation, transparency)
-	return new("UIGradient", {
-		Color = ColorSequence.new(keypoints),
-		Rotation = rotation or 0,
-		Transparency = transparency or NumberSequence.new(0),
-	}, parent)
-end
-
--- fades a gradient out at both ends so an element dissolves into the backdrop
-local function feather(inner, outer)
-	return NumberSequence.new({
-		NumberSequenceKeypoint.new(0, outer),
-		NumberSequenceKeypoint.new(0.5, inner),
-		NumberSequenceKeypoint.new(1, outer),
-	})
-end
-
-local function tween(inst, duration, props, style, direction)
-	local info = TweenInfo.new(
-		duration,
-		style or Enum.EasingStyle.Quint,
-		direction or Enum.EasingDirection.Out
-	)
-	local playing = TweenService:Create(inst, info, props)
-	playing:Play()
-	return playing
-end
-
--- ============================================================================
--- 1 · CANVAS & ATMOSPHERE
--- ============================================================================
-local screenGui = new("ScreenGui", {
-	Name = "LunarElysiumLoader",
-	IgnoreGuiInset = true,
-	ResetOnSpawn = false,
-	DisplayOrder = 99999,
-	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-}, playerGui)
-
-local backdrop = new("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = Theme.Void,
-	BorderSizePixel = 0,
-}, screenGui)
-
-local baseGradient = gradient(backdrop, {
-	ColorSequenceKeypoint.new(0.00, Theme.Void),
-	ColorSequenceKeypoint.new(0.42, Theme.Deep),
-	ColorSequenceKeypoint.new(0.58, Color3.fromRGB(24, 17, 48)),
-	ColorSequenceKeypoint.new(1.00, Theme.Void),
-}, 25)
-
--- CurrentCamera can still be nil this early in ReplicatedFirst.
-task.spawn(function()
-	local camera = workspace.CurrentCamera
-	if not camera then
-		camera = workspace:GetPropertyChangedSignal("CurrentCamera"):Wait()
-			and workspace.CurrentCamera
-	end
-	if camera then
-		local blur = new("BlurEffect", { Size = 0 }, camera)
-		tween(blur, 1.6, { Size = 26 }, Enum.EasingStyle.Sine)
-	end
-end)
-
--- Aurora sheets: three huge soft blobs that drift and breathe behind the panel.
-local auroraLayer = new("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-}, backdrop)
-
-local auroras = {}
-local auroraSpecs = {
-	{ color = Theme.Violet, w = 1.10, h = 0.62, y = 0.20, drift = 0.10, alpha = 0.88 },
-	{ color = Theme.Orchid, w = 0.90, h = 0.55, y = 0.78, drift = -0.07, alpha = 0.90 },
-	{ color = Theme.Aqua,   w = 0.70, h = 0.42, y = 0.50, drift = 0.14, alpha = 0.93 },
+local defaults = {
+    version = 1,
+    settings = {uiScale = 1, theme = "Frost", animations = false, snow = false, lights = false, paletteMotion = false,
+        toggleKey = "RightShift", stopKey = "F8", autoSave = true},
+    units = {},
+    actions = {
+        {kind = "hint", message = "Winter guide ready. Add your placement plan in UNIT MANAGER.", delay = 0, x = 0, y = 0, z = 0},
+        {kind = "wait", message = "Preparation time", delay = 2, x = 0, y = 0, z = 0},
+        {kind = "hint", message = "Guide completed. Gameplay actions remain under your control.", delay = 0, x = 0, y = 0, z = 0},
+    },
 }
-
-for index, spec in ipairs(auroraSpecs) do
-	local blob = new("Frame", {
-		Size = UDim2.fromScale(spec.w, spec.h),
-		Position = UDim2.fromScale(0.5, spec.y),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundColor3 = spec.color,
-		BackgroundTransparency = spec.alpha,
-		BorderSizePixel = 0,
-		Rotation = index * 14,
-	}, auroraLayer)
-	round(blob)
-	gradient(blob, {
-		ColorSequenceKeypoint.new(0, spec.color),
-		ColorSequenceKeypoint.new(1, spec.color),
-	}, 90, feather(0.1, 1))
-
-	table.insert(auroras, {
-		frame = blob,
-		spec = spec,
-		phase = index * 1.7,
-	})
+local config = copy(defaults)
+local profiles = {}
+local activeProfile = "Winter plan"
+local validateConfig
+local function allowedKeys(t, names, label)
+    assert(type(t) == "table", label .. " must be an object")
+    for k in pairs(t) do assert(names[k], label .. ": unknown field " .. tostring(k)) end
+end
+local function number(n, a, b, label, integer)
+    assert(finite(n) and n >= a and n <= b and (not integer or n % 1 == 0), label .. " must be " .. a .. ".." .. b)
+    return n
+end
+local function text(s, limit, label, allowEmpty)
+    assert(type(s) == "string" and #s <= limit and (allowEmpty or #trim(s) > 0), label .. " is invalid or too long")
+    assert(not s:find("[%z\1-\8\11\12\14-\31]"), label .. " contains control characters")
+    return s
+end
+local function array(t, maximum, label)
+    assert(type(t) == "table" and #t <= maximum, label .. " exceeds " .. maximum .. " entries")
+    local count = 0
+    for k in pairs(t) do assert(type(k) == "number" and k % 1 == 0 and k >= 1 and k <= #t, label .. " must be an array"); count += 1 end
+    assert(count == #t, label .. " has missing entries")
+end
+local forbiddenKeys = {Unknown = true, Escape = true, Return = true, Backspace = true}
+local function keyName(name)
+    assert(type(name) == "string" and #name <= 30 and not forbiddenKeys[name], "Invalid hotkey")
+    local ok, item = pcall(function() return Enum.KeyCode[name] end)
+    assert(ok and item and item.EnumType == Enum.KeyCode, "Unknown hotkey: " .. tostring(name))
+    return name
+end
+local actionKinds = {hint = true, wait = true, marker = true, clearMarkers = true}
+local function validateAction(a)
+    allowedKeys(a, {kind=true, message=true, delay=true, x=true, y=true, z=true}, "Action")
+    assert(actionKinds[a.kind], "Unsupported action kind")
+    text(a.message, 240, "Action message", a.kind ~= "hint")
+    number(a.delay, 0, 600, "Action delay")
+    for _, key in ipairs({"x", "y", "z"}) do number(a[key], -1000000, 1000000, "Action " .. key) end
+end
+local function validateUnit(u)
+    allowedKeys(u, {name=true, slot=true, x=true, y=true, z=true, placementPriority=true, upgradePriority=true, maxUpgrade=true, delay=true}, "Unit")
+    text(u.name, 60, "Unit name", false)
+    number(u.slot, 1, 12, "Slot", true)
+    for _, key in ipairs({"x", "y", "z"}) do number(u[key], -1000000, 1000000, "Unit " .. key) end
+    number(u.placementPriority, 1, 100, "Placement priority", true)
+    number(u.upgradePriority, 1, 100, "Upgrade priority", true)
+    number(u.maxUpgrade, 0, 30, "Planned upgrade count", true)
+    number(u.delay, 0, 600, "Placement delay")
+end
+function validateConfig(c)
+    allowedKeys(c, {version=true, settings=true, units=true, actions=true}, "Configuration")
+    assert(c.version == 1, "Unsupported configuration version")
+    local s = c.settings
+    assert(type(s)=="table", "Settings must be an object")
+    -- Version 1.0 exports remain valid; the new flow setting defaults to on.
+    if s.paletteMotion==nil then c=copy(c); c.settings.paletteMotion=true; s=c.settings end
+    allowedKeys(s, {uiScale=true, theme=true, animations=true, snow=true, lights=true, paletteMotion=true, toggleKey=true, stopKey=true, autoSave=true}, "Settings")
+    number(s.uiScale, 0.75, 1.4, "UI scale")
+    assert(THEMES[s.theme], "Unknown winter theme")
+    for _, key in ipairs({"animations", "snow", "lights", "paletteMotion", "autoSave"}) do assert(type(s[key]) == "boolean", key .. " must be boolean") end
+    keyName(s.toggleKey); keyName(s.stopKey)
+    assert(s.toggleKey ~= s.stopKey, "Show/hide and stop hotkeys must differ")
+    array(c.units, 50, "Units"); for _, u in ipairs(c.units) do validateUnit(u) end
+    array(c.actions, 300, "Actions"); for _, a in ipairs(c.actions) do validateAction(a) end
+    local normalized=copy(c)
+    -- Accept legacy JSON fields without restoring the removed visual effects.
+    for _,key in ipairs({"animations","snow","lights","paletteMotion"}) do normalized.settings[key]=false end
+    return normalized
 end
 
--- Edge fade so the top and bottom of the screen fall away into the dark.
-for _, edge in ipairs({ 0, 1 }) do
-	local fade = new("Frame", {
-		Size = UDim2.fromScale(1, 0.42),
-		Position = UDim2.fromScale(0.5, edge),
-		AnchorPoint = Vector2.new(0.5, edge),
-		BackgroundColor3 = Theme.Void,
-		BorderSizePixel = 0,
-	}, backdrop)
-	gradient(fade, {
-		ColorSequenceKeypoint.new(0, Theme.Void),
-		ColorSequenceKeypoint.new(1, Theme.Void),
-	}, edge == 0 and 90 or 270, NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.18),
-		NumberSequenceKeypoint.new(1, 1),
-	}))
+-- Actual bounded logs / protected entry points -------------------------------
+local logs = {}
+local logFilter = "ALL"
+local logsDirty = false
+local refreshLogs, notify, applyTheme, refreshAll, resize, updateHome
+local function log(category, message)
+    if category == "ERROR" then sessionErrors += 1 end
+    logs[#logs + 1] = {time = os.date("%H:%M:%S"), category = category, message = tostring(message):sub(1, 1200)}
+    if #logs > 180 then table.remove(logs, 1) end
+    logsDirty = true
+end
+local function protect(label, fn)
+    return function(...)
+        if not alive then return end
+        local args = table.pack(...)
+        local ok, err = xpcall(function() fn(table.unpack(args, 1, args.n)) end, debug.traceback)
+        if not ok then
+            log("ERROR", label .. ": " .. tostring(err))
+            if notify then notify("Action failed", tostring(err):match("^[^\n]+") or "See LOGS for details", "error") end
+        end
+    end
+end
+local function saveLocal()
+    local bundle = {config = config, profiles = profiles, activeProfile = activeProfile}
+    local encoded = HttpService:JSONEncode(bundle)
+    assert(#encoded <= 120000, "Session configuration exceeds 120 KB; reduce profiles/actions")
+    player:SetAttribute(ATTRIBUTE, encoded)
+end
+local function changed()
+    if saveThread then pcall(task.cancel, saveThread); saveThread = nil end
+    if not config.settings.autoSave or not alive then return end
+    saveThread = task.delay(0.4, function()
+        saveThread = nil
+        if alive then protect("Local autosave", saveLocal)() end
+    end)
+end
+local cached = player:GetAttribute(ATTRIBUTE)
+if type(cached) == "string" then
+    local ok, result = pcall(function()
+        assert(#cached <= 120000, "Cached session exceeds 120 KB")
+        local b = HttpService:JSONDecode(cached)
+        allowedKeys(b, {config=true, profiles=true, activeProfile=true}, "Session")
+        local c = validateConfig(b.config)
+        array(b.profiles, 12, "Profiles")
+        local names = {}
+        for _, p in ipairs(b.profiles) do
+            allowedKeys(p, {name=true, config=true}, "Profile")
+            text(p.name, 60, "Profile name", false)
+            assert(not names[p.name], "Duplicate profile name"); names[p.name] = true
+            validateConfig(p.config)
+        end
+        text(b.activeProfile, 60, "Active profile", false)
+        return {config=c, profiles=copy(b.profiles), activeProfile=b.activeProfile}
+    end)
+    if ok then config, profiles, activeProfile = result.config, result.profiles, result.activeProfile; log("CONFIG", "Restored local session configuration")
+    else log("WARNING", "Invalid local configuration; loaded defaults: " .. tostring(result)) end
 end
 
--- ============================================================================
--- 2 · STARFIELD
--- ============================================================================
-local starLayer = new("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-}, backdrop)
+-- UI foundation -------------------------------------------------------------
+local C = {bg=Color3.fromRGB(17,24,40), panel=Color3.fromRGB(24,35,55), card=Color3.fromRGB(38,53,77),
+    line=Color3.fromRGB(81,108,145), text=Color3.fromRGB(244,248,255), muted=Color3.fromRGB(162,187,215),
+    success=Color3.fromRGB(137,245,195), error=Color3.fromRGB(255,125,147)}
+local themeBindings = {}
+local surfaceBindings = {}
+local gradientBindings = {}
+local paletteClock = 0
+registerSurface=function(item,props)
+    for _,property in ipairs({"BackgroundColor3","TextColor3","PlaceholderColor3","Color","ScrollBarImageColor3"}) do
+        local value=props[property]
+        if typeof(value)=="Color3" then
+            for _,role in ipairs({"bg","panel","card","line","text","muted","success","error"}) do
+                if value==C[role] then surfaceBindings[#surfaceBindings+1]={item=item,property=property,role=role}; break end
+            end
+        end
+    end
+end
+local function paletteColor(phase)
+    local colors=THEMES[config.settings.theme].colors
+    local scaled=(phase%1)*#colors
+    local index=math.floor(scaled)+1
+    return colors[index]:Lerp(colors[index%#colors+1],scaled%1)
+end
+local function paletteSequence(mode,phase)
+    local points={}
+    for i=0,4 do
+        local color=paletteColor(phase+i*0.16)
+        if mode=="panel" then color=C.card:Lerp(color,0.32+i*0.018)
+        elseif mode=="shell" then color=C.bg:Lerp(color,0.025+i*0.006)
+        elseif mode=="hero" then color=C.panel:Lerp(color,0.20+i*0.03)
+        elseif mode=="subtle" then color=C.panel:Lerp(color,0.10) end
+        points[#points+1]=ColorSequenceKeypoint.new(i/4,color)
+    end
+    return ColorSequence.new(points)
+end
+local function winterGradient(item,mode,phase)
+    assert(not item:IsA("TextButton") and not item:IsA("TextLabel") and not item:IsA("TextBox"),"Decorative gradients must not tint text controls")
+    -- UIGradient MULTIPLIES the underlying color; keep owned fills white.
+    -- Automatic surface recoloring must not turn these fills dark again.
+    if item:IsA("GuiObject") then
+        item.BackgroundColor3=Color3.new(1,1,1)
+        for i=#surfaceBindings,1,-1 do
+            local b=surfaceBindings[i]
+            if b.item==item and b.property=="BackgroundColor3" then table.remove(surfaceBindings,i) end
+        end
+    end
+    local gradient=make("UIGradient",{Color=paletteSequence(mode,phase or 0),Rotation=mode=="shell" and 45 or 12},item)
+    gradientBindings[#gradientBindings+1]={item=item,gradient=gradient,mode=mode,phase=phase or 0}
+    return gradient
+end
+local function updatePalette(time)
+    for _,b in ipairs(gradientBindings) do
+        if b.gradient.Parent and b.item:IsDescendantOf(gui) then
+            local phase=time*0.025+b.phase
+            b.gradient.Color=paletteSequence(b.mode,phase)
+            b.gradient.Offset=Vector2.new(math.sin(time*0.23+b.phase*6)*0.24,math.cos(time*0.17+b.phase*6)*0.12)
+        end
+    end
+end
+local function bindAccent(item, property, secondary)
+    themeBindings[#themeBindings+1] = {item=item, property=property, secondary=secondary}
+    item[property] = THEMES[config.settings.theme][secondary and "secondary" or "accent"]
+end
+local function setVisual(item,properties)
+    if not alive or not item.Parent then return end
+    for property,value in pairs(properties) do item[property]=value end
+end
+local function label(parent, value, size, color, position, dimensions)
+    return make("TextLabel", {BackgroundTransparency=1, Text=value, TextSize=size or 14,
+        Font=Enum.Font.Gotham, TextColor3=color or C.text, TextXAlignment=Enum.TextXAlignment.Left,
+        TextYAlignment=Enum.TextYAlignment.Center, Position=position or UDim2.new(),
+        Size=dimensions or UDim2.new(1,0,0,24)}, parent)
+end
+local function stroke(item, color, transparency)
+    return make("UIStroke", {Color=color or C.line, Thickness=1, Transparency=transparency or 0.35,ApplyStrokeMode=Enum.ApplyStrokeMode.Border}, item)
+end
+local function button(parent, value, position, dimensions, fn, kind)
+    local b = make("TextButton", {Text=value, TextSize=13, Font=Enum.Font.GothamMedium, AutoButtonColor=false,
+        TextColor3=C.text, BackgroundColor3=kind=="danger" and Color3.fromRGB(125,43,65) or C.card,
+        Position=position, Size=dimensions, BorderSizePixel=0}, parent)
+    corner(b,10)
+    local outline=stroke(b)
+    if kind=="primary" then outline.Thickness=1.5; outline.Transparency=0.08; bindAccent(outline,"Color") end
+    connect(b.MouseEnter, function()
+        local resting=b:GetAttribute("RestingTransparency") or 0
+        setVisual(b,{BackgroundTransparency=resting==1 and 0.8 or 0.2})
+    end)
+    connect(b.MouseLeave, function() setVisual(b,{BackgroundTransparency=b:GetAttribute("RestingTransparency") or 0}) end)
+    connect(b.Activated, protect(value, fn))
+    return b
+end
+local root = make("Frame", {Name="Window", AnchorPoint=Vector2.new(0.5,0.5), Position=UDim2.fromScale(0.5,0.5),
+    Size=UDim2.fromOffset(1000,690), BackgroundColor3=Color3.new(1,1,1), BorderSizePixel=0, ClipsDescendants=false}, gui)
+corner(root,20)
+winterGradient(root,"shell",0.3)
+local shellStroke=stroke(root,Color3.new(1,1,1),0.38)
+shellStroke.Thickness=1.4; winterGradient(shellStroke,"accent",0.0)
+local uiScale = make("UIScale", {Scale=1}, root)
+local shadow = make("Frame", {Name="SoftOutline", Position=UDim2.fromOffset(-3,-3), Size=UDim2.new(1,6,1,6),
+    BackgroundTransparency=1, BorderSizePixel=0, ZIndex=0}, root)
+corner(shadow,23)
+local outerStroke=stroke(shadow,Color3.new(1,1,1),0.91); outerStroke.Thickness=7; winterGradient(outerStroke,"accent",0.1)
+local top = make("Frame", {Size=UDim2.new(1,0,0,64), BackgroundColor3=C.panel, BorderSizePixel=0, Active=true}, root)
+corner(top,18)
+make("Frame",{Position=UDim2.fromOffset(0,40),Size=UDim2.new(1,0,0,24),BackgroundColor3=C.panel,BorderSizePixel=0},top)
+local badge = make("Frame",{Position=UDim2.fromOffset(20,17),Size=UDim2.fromOffset(30,30),BorderSizePixel=0},top)
+corner(badge,9)
+badge.BackgroundColor3=Color3.new(1,1,1); winterGradient(badge,"accent",0.18)
+local badgeText = label(badge,"S",18,C.bg,UDim2.new(),UDim2.fromScale(1,1)); badgeText.TextXAlignment=Enum.TextXAlignment.Center; badgeText.Font=Enum.Font.GothamBold
+label(top,"SOLARA",17,C.text,UDim2.fromOffset(61,13),UDim2.fromOffset(130,22)).Font=Enum.Font.GothamBold
+label(top,"WINTER STUDIO  /  1.3",10,C.muted,UDim2.fromOffset(62,36),UDim2.fromOffset(180,15))
+local statePill=label(top,"LOCAL GUIDE",10,C.muted,UDim2.new(1,-270,0,22),UDim2.fromOffset(145,22))
+statePill.TextXAlignment=Enum.TextXAlignment.Right
+local minimized=false
+local content = make("Frame", {Position=UDim2.fromOffset(0,64), Size=UDim2.new(1,0,1,-64), BackgroundTransparency=1}, root)
+local sidebar=make("Frame",{Position=UDim2.fromOffset(16,18),Size=UDim2.new(0,180,1,-36),BackgroundColor3=C.panel,BorderSizePixel=0},content)
+corner(sidebar,14); stroke(sidebar,C.line,0.65)
+label(sidebar,"WORKSPACE",9,C.muted,UDim2.fromOffset(20,15),UDim2.new(1,-40,0,18))
+local navHost=make("ScrollingFrame",{Position=UDim2.fromOffset(10,45),Size=UDim2.new(1,-20,1,-143),BackgroundTransparency=1,BorderSizePixel=0,
+    ScrollBarThickness=2,ScrollBarImageColor3=C.line,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y},sidebar)
+make("UIListLayout",{Padding=UDim.new(0,8),SortOrder=Enum.SortOrder.LayoutOrder},navHost)
+local pageHost=make("Frame",{Position=UDim2.fromOffset(216,20),Size=UDim2.new(1,-238,1,-40),BackgroundTransparency=1,ClipsDescendants=true},content)
+-- Inactive pages live outside PlayerGui, so they cannot overlap the active one.
+local pageCache=make("Folder",{Name="SOLARA_InactivePages"},script)
+local pages, navButtons, navLabels = {}, {}, {}
+local currentPage="HOME"
+local pageNames={"HOME","UNIT MANAGER","MACRO","SETTINGS","LOGS"}
+local function newPage(name,title,subtitle)
+    local page=make("ScrollingFrame",{Name=name,Size=UDim2.fromScale(1,1),BackgroundTransparency=1,BorderSizePixel=0,
+        ScrollBarThickness=3,ScrollBarImageColor3=C.line,CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,
+        ScrollingDirection=Enum.ScrollingDirection.Y,Visible=name=="HOME"},name=="HOME" and pageHost or pageCache)
+    make("UIPadding",{PaddingRight=UDim.new(0,8),PaddingBottom=UDim.new(0,20)},page)
+    label(page,title,25,C.text,UDim2.fromOffset(0,0),UDim2.new(1,0,0,34)).Font=Enum.Font.GothamBold
+    local sub=label(page,subtitle,12,C.muted,UDim2.fromOffset(0,39),UDim2.new(1,0,0,38)); sub.TextWrapped=true; sub.TextYAlignment=Enum.TextYAlignment.Top
+    pages[name]=page; return page
+end
+local function switchPage(name)
+    assert(pages[name],"Unknown tab: "..tostring(name))
+    currentPage=name
+    for n,p in pairs(pages) do
+        p.Visible=false; p.Position=UDim2.new()
+        p.Parent=n==name and pageHost or pageCache
+    end
+    for n,b in pairs(navButtons) do
+        b:SetAttribute("RestingTransparency",n==name and 0 or 1)
+        b.BackgroundTransparency=n==name and 0 or 1
+        navLabels[n].TextColor3=n==name and C.text or C.muted
+        local indicator=b:FindFirstChild("SelectedIndicator")
+        if indicator then indicator.Visible=n==name end
+    end
+    local page=pages[name]
+    page.Visible=true
+    if name=="LOGS" and refreshLogs then refreshLogs() end
+end
+for i,name in ipairs(pageNames) do
+    local b=button(navHost,name,UDim2.new(),UDim2.new(1,-4,0,42),function() switchPage(name) end)
+    b.Text=""; b.LayoutOrder=i; b:SetAttribute("TabName",name)
+    navLabels[name]=label(b,name,11,C.muted,UDim2.fromOffset(40,0),UDim2.new(1,-47,1,0))
+    navLabels[name].Font=Enum.Font.GothamMedium
+    local indicator=make("Frame",{Name="SelectedIndicator",Position=UDim2.fromOffset(1,10),Size=UDim2.fromOffset(3,22),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},b)
+    corner(indicator,3); winterGradient(indicator,"accent",0.3)
+    navButtons[name]=b
+    local icon=make("Frame",{Position=UDim2.fromOffset(14,14),Size=UDim2.fromOffset(15,15),BackgroundTransparency=1},b)
+    local function iconLine(x,y,w,h,rotation)
+        local line=make("Frame",{Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h),Rotation=rotation or 0,BackgroundColor3=C.muted,BorderSizePixel=0},icon)
+        corner(line,2)
+    end
+    if name=="HOME" then
+        for col=0,1 do for row=0,1 do iconLine(col*8,row*8,6,6) end end
+    elseif name=="UNIT MANAGER" then
+        for row=0,2 do iconLine(0,row*5,3,3); iconLine(6,row*5+1,9,2) end
+    elseif name=="MACRO" then
+        iconLine(3,3,10,2,38); iconLine(3,10,10,2,-38)
+    elseif name=="SETTINGS" then
+        iconLine(0,6,15,3); iconLine(6,0,3,15)
+        local circle=make("Frame",{Position=UDim2.fromOffset(3,3),Size=UDim2.fromOffset(9,9),BackgroundColor3=C.panel,BorderSizePixel=0},icon)
+        corner(circle,8); stroke(circle,C.muted,0)
+    else
+        iconLine(0,1,15,2); iconLine(0,6,11,2); iconLine(0,11,13,2)
+    end
+end
+local sideFoot=label(sidebar,"WHERE WINTER\nMEETS YOUR STRATEGY",9,C.muted,UDim2.new(0,17,1,-81),UDim2.new(1,-30,0,38)); sideFoot.TextWrapped=true
+local keyFoot=label(sidebar,"RightShift · show/hide\nF8 · stop guide",10,C.muted,UDim2.new(0,17,1,-43),UDim2.new(1,-25,0,32))
+keyFoot.TextWrapped=true
 
-local stars = {}
-for i = 1, 110 do
-	local scale = math.random(1, 3)
-	local star = new("Frame", {
-		Size = UDim2.fromOffset(scale, scale),
-		Position = UDim2.fromScale(math.random(), math.random()),
-		BackgroundColor3 = (i % 9 == 0) and Theme.Aqua or Theme.Moon,
-		BackgroundTransparency = math.random(35, 85) / 100,
-		BorderSizePixel = 0,
-	}, starLayer)
-	round(star)
-
-	table.insert(stars, {
-		frame = star,
-		base = star.BackgroundTransparency,
-		phase = math.random() * math.pi * 2,
-		rate = 0.5 + math.random() * 1.9,
-	})
+-- Modal dialogs and notifications ------------------------------------------
+local modal=nil
+local modalClose
+local toastRecords={}
+local toastHost=make("Frame",{AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,-22,1,-22),Size=UDim2.fromOffset(330,260),BackgroundTransparency=1},gui)
+make("UIListLayout",{Padding=UDim.new(0,8),VerticalAlignment=Enum.VerticalAlignment.Bottom,SortOrder=Enum.SortOrder.LayoutOrder},toastHost)
+function notify(title, message, kind)
+    if not alive then return end
+    if #toastRecords>=3 then local first=table.remove(toastRecords,1); if first.Parent then first:Destroy() end end
+    local frame=make("Frame",{Size=UDim2.new(1,0,0,75),BackgroundColor3=C.panel,BackgroundTransparency=0.08,BorderSizePixel=0},toastHost)
+    corner(frame,12); stroke(frame)
+    local edge=make("Frame",{Position=UDim2.fromOffset(0,13),Size=UDim2.fromOffset(3,49),BorderSizePixel=0},frame)
+    if kind=="error" then edge.BackgroundColor3=C.error else bindAccent(edge,"BackgroundColor3") end
+    label(frame,title,13,C.text,UDim2.fromOffset(16,9),UDim2.new(1,-26,0,22)).Font=Enum.Font.GothamMedium
+    local body=label(frame,message,11,C.muted,UDim2.fromOffset(16,33),UDim2.new(1,-27,0,33)); body.TextWrapped=true; body.TextYAlignment=Enum.TextYAlignment.Top
+    toastRecords[#toastRecords+1]=frame
+    local start=os.clock()
+    frame:SetAttribute("Expires",start+5)
+end
+local function closeModal()
+    if modalClose then local fn=modalClose; modalClose=nil; fn() end
+    if modal then modal:Destroy(); modal=nil end
+end
+local function modalBase(title,height)
+    closeModal()
+    modal=make("TextButton",{Name="ModalOverlay",Text="",AutoButtonColor=false,Size=UDim2.fromScale(1,1),BackgroundColor3=Color3.new(0,0,0),BackgroundTransparency=0.35,ZIndex=20},root)
+    local box=make("Frame",{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.new(0.88,0,0,height),BackgroundColor3=C.panel,BorderSizePixel=0,ZIndex=21},modal)
+    corner(box,15); stroke(box)
+    label(box,title,19,C.text,UDim2.fromOffset(22,16),UDim2.new(1,-80,0,30)).ZIndex=22
+    local x=button(box,"X",UDim2.new(1,-49,0,15),UDim2.fromOffset(30,30),closeModal); x.ZIndex=22
+    return box
+end
+local function textBox(parent,value,position,dimensions,multiline)
+    local t=make("TextBox",{Text=value,PlaceholderText="",TextSize=12,Font=Enum.Font.Gotham,TextColor3=C.text,
+        PlaceholderColor3=C.muted,BackgroundColor3=C.bg,BorderSizePixel=0,ClearTextOnFocus=false,
+        TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=multiline and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
+        MultiLine=multiline or false,TextWrapped=multiline or false,Position=position,Size=dimensions,ZIndex=22},parent)
+    corner(t,8); stroke(t)
+    make("UIPadding",{PaddingLeft=UDim.new(0,10),PaddingRight=UDim.new(0,10),PaddingTop=UDim.new(0,multiline and 9 or 0)},t)
+    return t
+end
+local function prompt(title,value,onSubmit)
+    local box=modalBase(title,172)
+    local field=textBox(box,value,UDim2.fromOffset(22,62),UDim2.new(1,-44,0,38))
+    local b=button(box,"Confirm",UDim2.new(1,-134,1,-51),UDim2.fromOffset(112,32),function() onSubmit(field.Text); closeModal() end,"primary"); b.ZIndex=22
+    field:CaptureFocus()
+end
+local function jsonDialog(title,value,onImport)
+    local box=modalBase(title,440)
+    local info=label(box,onImport and "Paste a SOLARA configuration. Validation runs before anything changes." or "Ctrl+A, Ctrl+C: save this text in your own file for your next session.",11,C.muted,UDim2.fromOffset(22,53),UDim2.new(1,-44,0,31)); info.TextWrapped=true; info.ZIndex=22
+    local scroll=make("ScrollingFrame",{Position=UDim2.fromOffset(22,89),Size=UDim2.new(1,-44,1,-153),CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=4,BackgroundTransparency=1,BorderSizePixel=0,ZIndex=22},box)
+    local field=textBox(scroll,value,UDim2.new(),UDim2.new(1,-8,0,275),true)
+    field.AutomaticSize=Enum.AutomaticSize.Y
+    field.Font=Enum.Font.Code; field.TextSize=11
+    local b=button(box,onImport and "Validate & import" or "Select all",UDim2.new(1,-178,1,-49),UDim2.fromOffset(156,32),function()
+        if onImport then onImport(field.Text); closeModal()
+        else field:CaptureFocus(); field.CursorPosition=#field.Text+1; field.SelectionStart=1 end
+    end,"primary"); b.ZIndex=22
 end
 
--- ============================================================================
--- 3 · MOON HALO & ORBIT RINGS
--- ============================================================================
-local halo = new("Frame", {
-	Size = UDim2.fromOffset(470, 470),
-	Position = UDim2.fromScale(0.5, 0.5),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Theme.Violet,
-	BackgroundTransparency = 0.88,
-	BorderSizePixel = 0,
-}, backdrop)
-round(halo)
-gradient(halo, {
-	ColorSequenceKeypoint.new(0.0, Theme.Orchid),
-	ColorSequenceKeypoint.new(0.5, Theme.Violet),
-	ColorSequenceKeypoint.new(1.0, Theme.Aqua),
-}, 45)
-
-local rings = {}
-for i = 1, 3 do
-	local span = 340 + i * 78
-	local ring = new("Frame", {
-		Size = UDim2.fromOffset(span, span),
-		Position = UDim2.fromScale(0.5, 0.5),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundTransparency = 1,
-	}, backdrop)
-	round(ring)
-
-	local ringStroke = stroke(ring, Theme.Lilac, 1, 0.74 + i * 0.06)
-	local ringGradient = gradient(ringStroke, {
-		ColorSequenceKeypoint.new(0.0, Theme.Orchid),
-		ColorSequenceKeypoint.new(0.5, Theme.Aqua),
-		ColorSequenceKeypoint.new(1.0, Theme.Orchid),
-	}, i * 40)
-
-	table.insert(rings, {
-		gradient = ringGradient,
-		speed = (i % 2 == 0) and -(10 + i * 5) or (14 + i * 6),
-	})
+-- Local marker system / execution engine -----------------------------------
+local markerFolder=make("Folder",{Name="SOLARA_LocalMarkers_"..player.UserId},Workspace)
+local markers={}
+local function clearMarkers()
+    markerFolder:ClearAllChildren(); markers={}
+end
+local function addMarker(position,message)
+    assert(typeof(position)=="Vector3","Marker requires a Vector3")
+    if #markers>=50 then local first=table.remove(markers,1); first:Destroy() end
+    local anchor=make("Part",{Name="GuideMarker",Anchored=true,CanCollide=false,CanTouch=false,CanQuery=false,
+        Transparency=1,Size=Vector3.new(0.1,0.1,0.1),Position=position},markerFolder)
+    local bill=make("BillboardGui",{Size=UDim2.fromOffset(185,50),StudsOffset=Vector3.new(0,2.2,0),AlwaysOnTop=true,MaxDistance=500},anchor)
+    local panel=make("Frame",{Size=UDim2.fromScale(1,1),BackgroundColor3=C.panel,BackgroundTransparency=0.12,BorderSizePixel=0},bill)
+    corner(panel,10)
+    local st=stroke(panel); st.Color=THEMES[config.settings.theme].accent
+    local t=label(panel,message,12,THEMES[config.settings.theme].accent,UDim2.fromOffset(9,4),UDim2.new(1,-18,1,-8)); t.TextWrapped=true; t.TextXAlignment=Enum.TextXAlignment.Center
+    markers[#markers+1]=anchor
+    return anchor
+end
+local engine={state="idle",index=0,total=0,elapsed=0,remaining=0,lastAction="No actions executed",run=nil,completed=0}
+local function stopGuide(reason)
+    local wasRunning=engine.state=="running" or engine.state=="paused"
+    engine.state="idle"; engine.run=nil; engine.remaining=0; engine.index=0; engine.total=0
+    clearMarkers()
+    if wasRunning then log("GUIDE",reason or "Guide stopped; all pending actions cancelled") end
+    if updateHome then updateHome() end
+end
+local function pauseGuide()
+    if engine.state~="running" then notify("Nothing to pause","Start a guide first."); return end
+    engine.state="paused"; log("GUIDE","Guide paused; countdown frozen")
+    if updateHome then updateHome() end
+end
+local function resumeGuide()
+    if engine.state~="paused" then notify("Nothing to resume","The guide is not paused."); return end
+    engine.state="running"; log("GUIDE","Guide resumed")
+    if updateHome then updateHome() end
+end
+local function startGuide()
+    assert(engine.state~="running" and engine.state~="paused","A guide is already active; stop it before starting another")
+    validateConfig(config)
+    assert(#config.actions>0,"Add at least one action in MACRO")
+    clearMarkers()
+    engine.run=copy(config.actions); engine.index=1; engine.total=#engine.run; engine.remaining=engine.run[1].delay
+    engine.elapsed=0; engine.state="running"; log("GUIDE","Started local guide with "..engine.total.." actions")
+    notify("Guide started","Only reminders and local markers are executed.")
+    if updateHome then updateHome() end
+end
+local function executeAction(a)
+    if a.kind=="hint" then notify("Strategy reminder",a.message); engine.lastAction=a.message
+    elseif a.kind=="marker" then addMarker(Vector3.new(a.x,a.y,a.z),a.message~="" and a.message or "Planned position"); engine.lastAction="Placed local marker: "..a.message
+    elseif a.kind=="wait" then engine.lastAction=a.message~="" and a.message or "Wait completed"
+    elseif a.kind=="clearMarkers" then clearMarkers(); engine.lastAction="Cleared local markers"
+    else error("Unsupported action kind") end
+    log("ACTION",tostring(engine.index).."/"..engine.total.." · "..a.kind.." · "..engine.lastAction)
+end
+local function advanceGuide(dt)
+    if engine.state~="running" or not engine.run then return end
+    engine.elapsed+=dt; engine.remaining-=dt
+    local count=0
+    while engine.state=="running" and engine.remaining<=0 and count<12 do
+        count+=1
+        local a=engine.run[engine.index]
+        local ok,err=xpcall(function() executeAction(a) end,debug.traceback)
+        if not ok then stopGuide("Guide stopped after an action error"); log("ERROR",err); notify("Guide error","Execution stopped. See LOGS.","error"); return end
+        engine.index+=1
+        if engine.index>engine.total then
+            engine.state="completed"; engine.completed+=1; engine.run=nil; engine.remaining=0
+            log("GUIDE","Local guide completed (not a completed game match)")
+            notify("Guide complete","All planned reminders and markers were executed.")
+            if updateHome then updateHome() end
+            return
+        end
+        engine.remaining+=engine.run[engine.index].delay
+    end
 end
 
--- Drifting motes: slow rising dust that gives the scene depth.
-local moteLayer = new("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-}, backdrop)
-
-local motePalette = { Theme.Moon, Theme.Lilac, Theme.Orchid, Theme.Aqua }
-
-local function spawnMote()
-	local size = math.random(2, 5)
-	local mote = new("Frame", {
-		Size = UDim2.fromOffset(size, size),
-		Position = UDim2.new(math.random(), 0, 1.08, 0),
-		BackgroundColor3 = motePalette[math.random(#motePalette)],
-		BackgroundTransparency = math.random(25, 65) / 100,
-		BorderSizePixel = 0,
-	}, moteLayer)
-	round(mote)
-
-	local sway = math.random(-14, 14) / 100
-	local travel = math.random(60, 95) / 10
-
-	tween(mote, travel, {
-		Position = UDim2.new(mote.Position.X.Scale + sway, 0, -0.1, 0),
-		BackgroundTransparency = 1,
-	}, Enum.EasingStyle.Linear)
-
-	task.delay(travel + 0.2, function()
-		mote:Destroy()
-	end)
+-- HOME ---------------------------------------------------------------------
+local home=newPage("HOME","Your winter workspace.","Welcome back, "..player.DisplayName..". Build your plan, then run it at your own pace.")
+local hero=make("Frame",{Position=UDim2.fromOffset(0,86),Size=UDim2.new(1,0,0,130),BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0,ClipsDescendants=true},home)
+corner(hero,16); stroke(hero,Color3.new(1,1,1),0.76)
+local heroGrad=winterGradient(hero,"hero",0.15)
+local function setHeroGradient()
+    heroGrad.Color=paletteSequence("hero",paletteClock*0.025+0.15)
+end
+setHeroGradient()
+label(hero,"SOLARA  /  WINTER COLLECTION",9,C.text,UDim2.fromOffset(24,17),UDim2.new(1,-116,0,17))
+local heroTitle=label(hero,"MAKE YOUR NEXT MOVE.",25,C.text,UDim2.fromOffset(24,43),UDim2.new(1,-118,0,34)); heroTitle.Font=Enum.Font.GothamBold
+local heroText=label(hero,"One workspace for your units, sequences and configurations.",12,C.text,UDim2.fromOffset(24,90),UDim2.new(1,-118,0,27)); heroText.TextWrapped=true
+local crest=make("Frame",{Position=UDim2.new(1,-87,0,38),Size=UDim2.fromOffset(59,59),BackgroundColor3=C.panel,BackgroundTransparency=0.45,BorderSizePixel=0},hero)
+corner(crest,30); local crestBorder=stroke(crest,Color3.new(1,1,1),0.35); winterGradient(crestBorder,"accent",0.15)
+for arm=0,2 do
+    local line=make("Frame",{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(32,2),Rotation=arm*60,BackgroundColor3=Color3.new(1,1,1),BorderSizePixel=0},crest)
+    corner(line,2); winterGradient(line,"accent",0.15)
+end
+local stats={}
+local statNames={"GUIDE STATE","SESSION","LOCAL GUIDES FINISHED","ERRORS"}
+for i,name in ipairs(statNames) do
+    local col=(i-1)%2; local row=math.floor((i-1)/2)
+    local card=make("Frame",{Position=UDim2.new(col*0.5,col==0 and 0 or 7,0,231+row*82),Size=UDim2.new(0.5,-7,0,71),BackgroundColor3=C.panel,BorderSizePixel=0},home)
+    corner(card,12); stroke(card,C.line,0.65)
+    label(card,name,9,C.muted,UDim2.fromOffset(17,10),UDim2.new(1,-34,0,16))
+    stats[name]=label(card,"—",21,C.text,UDim2.fromOffset(17,33),UDim2.new(1,-34,0,26))
+end
+local gameInfo=label(home,"",11,C.muted,UDim2.fromOffset(1,399),UDim2.new(1,-2,0,43)); gameInfo.TextWrapped=true; gameInfo.TextYAlignment=Enum.TextYAlignment.Top
+local homeTask=label(home,"",12,C.text,UDim2.fromOffset(1,451),UDim2.new(1,-2,0,40)); homeTask.TextWrapped=true
+button(home,"Start",UDim2.new(0,0,0,507),UDim2.new(0.24,-5,0,36),startGuide,"primary")
+button(home,"Pause",UDim2.new(0.25,0,0,507),UDim2.new(0.24,-5,0,36),pauseGuide)
+button(home,"Resume",UDim2.new(0.5,0,0,507),UDim2.new(0.24,-5,0,36),resumeGuide)
+button(home,"Stop",UDim2.new(0.75,0,0,507),UDim2.new(0.25,0,0,36),function() stopGuide() end,"danger")
+function updateHome()
+    stats["GUIDE STATE"].Text=engine.state:upper()
+    local duration=math.floor(os.clock()-epoch)
+    stats["SESSION"].Text=string.format("%02d:%02d:%02d",math.floor(duration/3600),math.floor(duration/60)%60,duration%60)
+    stats["LOCAL GUIDES FINISHED"].Text=tostring(engine.completed)
+    stats["ERRORS"].Text=tostring(sessionErrors)
+    gameInfo.Text="ROBLOX SESSION   ·   Place "..game.PlaceId.."   /   Universe "..game.GameId.."\n"..(game.JobId~="" and "Server "..game.JobId:sub(1,32) or "Roblox Studio test session")
+    homeTask.Text=(engine.state=="running" or engine.state=="paused") and string.format("Action %d/%d · next in %.1fs\nLast: %s",engine.index,engine.total,math.max(0,engine.remaining),engine.lastAction) or "Last action: "..engine.lastAction
+    statePill.Text=engine.state:upper().." / LOCAL GUIDE"
 end
 
--- ============================================================================
--- 4 · GLASS PANEL
--- ============================================================================
-local PANEL_W, PANEL_H = 400, 300
+-- Shared editors ------------------------------------------------------------
+local selectedUnit=1
+local selectedAction=1
+local pickTarget=nil
+local refreshUnits, refreshActions, refreshSettings, refreshProfiles
+local function editFields(title,specs,source,validator,onSave)
+    local box=modalBase(title,420)
+    local fields={}
+    for i,spec in ipairs(specs) do
+        local col=(i-1)%2; local row=math.floor((i-1)/2)
+        local x=col==0 and UDim2.fromOffset(22,64+row*57) or UDim2.new(0.5,8,0,64+row*57)
+        local caption=label(box,spec[2],10,C.muted,x,UDim2.new(0.5,-30,0,16)); caption.ZIndex=22
+        local t=textBox(box,tostring(source[spec[1]]),x+UDim2.fromOffset(0,19),UDim2.new(0.5,-30,0,30))
+        fields[spec[1]]={box=t,numeric=spec[3]}
+    end
+    local note=label(box,"Changes apply only after validation. Coordinates are world studs.",10,C.muted,UDim2.fromOffset(22,363),UDim2.new(1,-178,0,34)); note.TextWrapped=true; note.ZIndex=22
+    local b=button(box,"Apply",UDim2.new(1,-134,1,-50),UDim2.fromOffset(112,32),function()
+        local updated=copy(source)
+        for key,field in pairs(fields) do
+            local raw=trim(field.box.Text)
+            if field.numeric then updated[key]=tonumber(raw); assert(updated[key]~=nil,key.." must be a number")
+            else updated[key]=raw end
+        end
+        validator(updated); onSave(updated); changed(); closeModal()
+    end,"primary"); b.ZIndex=22
+end
+local function moveItem(list,index,offset)
+    local destination=index+offset
+    if not list[index] or destination<1 or destination>#list then notify("End of list","This item cannot move farther."); return index end
+    list[index],list[destination]=list[destination],list[index]; changed(); return destination
+end
+local function emptyList(parent,message)
+    local t=label(parent,message,12,C.muted,UDim2.fromOffset(14,10),UDim2.new(1,-28,0,70)); t.TextWrapped=true
+end
+local function listPanel(parent,y,height)
+    local panel=make("ScrollingFrame",{Position=UDim2.fromOffset(0,y),Size=UDim2.new(1,0,0,height),BackgroundColor3=C.panel,BorderSizePixel=0,
+        CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=3,ScrollBarImageColor3=C.line},parent)
+    corner(panel,10); stroke(panel)
+    return panel
+end
+local function clearList(panel)
+    for _,child in ipairs(panel:GetChildren()) do if child:IsA("GuiObject") then child:Destroy() end end
+end
 
-local panel = new("Frame", {
-	Size = UDim2.fromOffset(PANEL_W, PANEL_H),
-	Position = UDim2.fromScale(0.5, 0.5),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Theme.Panel,
-	BackgroundTransparency = 0.1,
-	BorderSizePixel = 0,
-	ClipsDescendants = true,
-}, backdrop)
-corner(panel, 18)
-gradient(panel, {
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(32, 27, 58)),
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 10, 24)),
-}, 115)
+-- UNIT MANAGER: a functional plan and spatial editor ------------------------
+local unitsPage=newPage("UNIT MANAGER","Plan the placement. Keep the control.","Organize real coordinates and priorities. Markers guide you; spawning and upgrading remain manual.")
+local unitList=listPanel(unitsPage,86,221)
+local unitDescription=label(unitsPage,"",11,C.muted,UDim2.fromOffset(0,317),UDim2.new(1,0,0,53)); unitDescription.TextWrapped=true; unitDescription.TextYAlignment=Enum.TextYAlignment.Top
+function refreshUnits()
+    clearList(unitList)
+    selectedUnit=clamp(selectedUnit,1,math.max(1,#config.units))
+    if #config.units==0 then emptyList(unitList,"No units yet. Add a unit, set its planned position, then build a placement guide.") end
+    for i,u in ipairs(config.units) do
+        local row=button(unitList,string.format("%02d   %s",i,u.name),UDim2.fromOffset(8,8+(i-1)*47),UDim2.new(1,-20,0,40),function() selectedUnit=i; refreshUnits() end)
+        row.Text=""
+        make("UIPadding",{PaddingLeft=UDim.new(0,12)},row)
+        local title=label(row,string.format("%02d   %s",i,u.name),13,C.text,UDim2.new(),UDim2.new(1,-172,1,0))
+        title.TextTruncate=Enum.TextTruncate.AtEnd
+        if i==selectedUnit then
+            local outline=row:FindFirstChild("UIStroke")
+            if outline then outline.Color=THEMES[config.settings.theme].accent; outline.Transparency=0.08 end
+        end
+        row.TextTruncate=Enum.TextTruncate.AtEnd
+        local summary=label(row,"Slot "..u.slot.."  ·  P"..u.placementPriority.." / U"..u.upgradePriority,10,C.muted,UDim2.new(1,-164,0,10),UDim2.fromOffset(151,20)); summary.TextXAlignment=Enum.TextXAlignment.Right
+    end
+    local u=config.units[selectedUnit]
+    unitDescription.Text=u and string.format("Selected: %s · world (%.1f, %.1f, %.1f)\nPlace priority %d · upgrade priority %d · planned upgrades %d · delay %.1fs",u.name,u.x,u.y,u.z,u.placementPriority,u.upgradePriority,u.maxUpgrade,u.delay) or "Each unit stores its slot, world position, placement/upgrade priorities, planned upgrades and placement delay."
+end
+button(unitsPage,"+ Add unit",UDim2.new(0,0,0,378),UDim2.new(0.32,-5,0,33),function()
+    assert(#config.units<50,"At most 50 unit plans are supported")
+    local char=player.Character
+    local hrp=char and char:FindFirstChild("HumanoidRootPart")
+    local pos=hrp and hrp.Position or Vector3.new(0,0,0)
+    config.units[#config.units+1]={name="Unit "..(#config.units+1),slot=1,x=pos.X,y=pos.Y,z=pos.Z,placementPriority=#config.units+1,upgradePriority=1,maxUpgrade=0,delay=1}
+    selectedUnit=#config.units; refreshUnits(); changed(); log("UNIT","Added unit plan")
+end,"primary")
+button(unitsPage,"Edit selected",UDim2.new(0.34,0,0,378),UDim2.new(0.32,-5,0,33),function()
+    local u=config.units[selectedUnit]; assert(u,"Select or add a unit first")
+    local index=selectedUnit
+    editFields("Edit unit plan",{{"name","Unit name"},{"slot","Slot (1–12)",true},{"x","World X",true},{"y","World Y",true},{"z","World Z",true},
+        {"placementPriority","Placement priority (1 first)",true},{"upgradePriority","Upgrade priority (1 first)",true},{"maxUpgrade","Planned upgrade count (0–30)",true},{"delay","Placement delay (seconds)",true}},u,validateUnit,function(updated)
+        assert(config.units[index]==u,"Unit plan changed while editing")
+        config.units[index]=updated; refreshUnits(); log("UNIT","Updated "..updated.name)
+    end)
+end)
+button(unitsPage,"Delete",UDim2.new(0.68,0,0,378),UDim2.new(0.32,0,0,33),function()
+    assert(config.units[selectedUnit],"No unit selected")
+    table.remove(config.units,selectedUnit); refreshUnits(); changed(); log("UNIT","Deleted unit plan")
+end,"danger")
+button(unitsPage,"Move up",UDim2.new(0,0,0,422),UDim2.new(0.24,-5,0,32),function() selectedUnit=moveItem(config.units,selectedUnit,-1); refreshUnits() end)
+button(unitsPage,"Move down",UDim2.new(0.25,0,0,422),UDim2.new(0.24,-5,0,32),function() selectedUnit=moveItem(config.units,selectedUnit,1); refreshUnits() end)
+button(unitsPage,"Pick world position",UDim2.new(0.5,0,0,422),UDim2.new(0.5,0,0,32),function()
+    local u=config.units[selectedUnit]; assert(u,"Select or add a unit first")
+    pickTarget=u
+    notify("Pick a world position","Click visible world geometry outside the window. Escape cancels.")
+    log("UNIT","Position picker armed for "..u.name)
+end)
+button(unitsPage,"Preview markers",UDim2.new(0,0,0,466),UDim2.new(0.49,-4,0,32),function()
+    assert(engine.state~="running" and engine.state~="paused","Stop the active guide before previewing a different plan")
+    assert(#config.units>0,"Add a unit first")
+    clearMarkers()
+    for _,u in ipairs(config.units) do addMarker(Vector3.new(u.x,u.y,u.z),u.name.." / slot "..u.slot) end
+    log("UNIT","Displayed "..#config.units.." local placement markers")
+end)
+button(unitsPage,"Clear markers",UDim2.new(0.5,0,0,466),UDim2.new(0.5,0,0,32),function() clearMarkers(); log("UNIT","Cleared all local markers") end)
+button(unitsPage,"Build placement & upgrade guide",UDim2.fromOffset(0,510),UDim2.new(1,0,0,36),function()
+    assert(#config.units>0,"Add a unit first")
+    assert(engine.state~="running" and engine.state~="paused","Stop the active guide first")
+    local ordered={}
+    for i,u in ipairs(config.units) do ordered[#ordered+1]={unit=u,order=i} end
+    table.sort(ordered,function(a,b) return a.unit.placementPriority==b.unit.placementPriority and a.order<b.order or a.unit.placementPriority<b.unit.placementPriority end)
+    local actions={}
+    for _,entry in ipairs(ordered) do
+        local u=entry.unit
+        actions[#actions+1]={kind="marker",message=u.name.." / slot "..u.slot,delay=0,x=u.x,y=u.y,z=u.z}
+        actions[#actions+1]={kind="hint",message="Place "..u.name.." manually using slot "..u.slot.." at the marked position.",delay=u.delay,x=0,y=0,z=0}
+    end
+    table.sort(ordered,function(a,b) return a.unit.upgradePriority==b.unit.upgradePriority and a.order<b.order or a.unit.upgradePriority<b.unit.upgradePriority end)
+    for _,entry in ipairs(ordered) do
+        local u=entry.unit
+        if u.maxUpgrade>0 then actions[#actions+1]={kind="hint",message="Upgrade priority "..u.upgradePriority..": "..u.name..". Planned upgrades: "..u.maxUpgrade..". Check the actual level in-game.",delay=u.delay,x=0,y=0,z=0} end
+    end
+    actions[#actions+1]={kind="clearMarkers",message="",delay=3,x=0,y=0,z=0}
+    config.actions=actions; selectedAction=1; refreshActions(); changed()
+    log("UNIT","Built "..#actions.." real guide actions from the unit plan"); switchPage("MACRO")
+end,"primary")
 
-local panelStroke = stroke(panel, Theme.Lilac, 1.4, 0.32)
-local panelStrokeGradient = gradient(panelStroke, {
-	ColorSequenceKeypoint.new(0.00, Theme.Orchid),
-	ColorSequenceKeypoint.new(0.35, Theme.Aqua),
-	ColorSequenceKeypoint.new(0.70, Theme.Violet),
-	ColorSequenceKeypoint.new(1.00, Theme.Orchid),
-}, 0)
+-- MACRO: editable local sequences and configuration profiles ----------------
+local macroPage=newPage("MACRO","Your sequence, your pace.","Run reminders, waits and markers. Gameplay stays under your control.")
+local actionList=listPanel(macroPage,86,205)
+local actionInfo=label(macroPage,"",11,C.muted,UDim2.fromOffset(0,303),UDim2.new(1,0,0,34)); actionInfo.TextWrapped=true
+function refreshActions()
+    clearList(actionList); selectedAction=clamp(selectedAction,1,math.max(1,#config.actions))
+    if #config.actions==0 then emptyList(actionList,"No actions. Add a hint, wait or marker; or build a guide in UNIT MANAGER.") end
+    for i,a in ipairs(config.actions) do
+        local caption=string.format("%02d  %-12s  %s",i,a.kind,a.message~="" and a.message or "—")
+        local row=button(actionList,caption,UDim2.fromOffset(8,8+(i-1)*39),UDim2.new(1,-20,0,33),function() selectedAction=i; refreshActions() end)
+        row.Text=""
+        make("UIPadding",{PaddingLeft=UDim.new(0,10)},row)
+        local title=label(row,caption,11,C.text,UDim2.new(),UDim2.new(1,-74,1,0))
+        title.TextTruncate=Enum.TextTruncate.AtEnd
+        if i==selectedAction then
+            local outline=row:FindFirstChild("UIStroke")
+            if outline then outline.Color=THEMES[config.settings.theme].accent; outline.Transparency=0.08 end
+        end
+        local delay=label(row,string.format("%.1fs",a.delay),10,C.muted,UDim2.new(1,-60,0,6),UDim2.fromOffset(49,20)); delay.TextXAlignment=Enum.TextXAlignment.Right
+    end
+    local a=config.actions[selectedAction]
+    actionInfo.Text=a and string.format("Selected %d · %s · delay BEFORE action %.1fs · marker (%.1f, %.1f, %.1f)",selectedAction,a.kind,a.delay,a.x,a.y,a.z) or "At most 300 actions; each delay is applied before that action."
+end
+local function addAction(kind)
+    assert(#config.actions<300,"At most 300 actions are supported")
+    config.actions[#config.actions+1]={kind=kind,message=kind=="hint" and "Your strategy reminder" or kind=="marker" and "Planned position" or "",delay=kind=="wait" and 2 or 0,x=0,y=0,z=0}
+    selectedAction=#config.actions; refreshActions(); changed(); log("MACRO","Added "..kind.." action")
+end
+for i,kind in ipairs({"hint","wait","marker","clearMarkers"}) do
+    local captions={hint="+ Hint",wait="+ Wait",marker="+ Marker",clearMarkers="+ Clear markers"}
+    button(macroPage,captions[kind],UDim2.new((i-1)*0.25,0,0,347),UDim2.new(0.25,-6,0,31),function() addAction(kind) end)
+end
+button(macroPage,"Edit",UDim2.new(0,0,0,389),UDim2.new(0.24,-5,0,31),function()
+    local a=config.actions[selectedAction]; assert(a,"Select or add an action first")
+    local index=selectedAction
+    editFields("Edit local action",{{"kind","Kind: hint / wait / marker / clearMarkers"},{"message","Message (max 240 bytes)"},{"delay","Delay before action (seconds)",true},
+        {"x","Marker X",true},{"y","Marker Y",true},{"z","Marker Z",true}},a,validateAction,function(updated)
+        assert(config.actions[index]==a,"Action changed while editing")
+        config.actions[index]=updated; refreshActions(); log("MACRO","Updated action "..index)
+    end)
+end)
+button(macroPage,"Delete",UDim2.new(0.25,0,0,389),UDim2.new(0.24,-5,0,31),function()
+    assert(config.actions[selectedAction],"No action selected")
+    table.remove(config.actions,selectedAction); refreshActions(); changed(); log("MACRO","Deleted action")
+end,"danger")
+button(macroPage,"Move up",UDim2.new(0.5,0,0,389),UDim2.new(0.24,-5,0,31),function() selectedAction=moveItem(config.actions,selectedAction,-1); refreshActions() end)
+button(macroPage,"Move down",UDim2.new(0.75,0,0,389),UDim2.new(0.25,-5,0,31),function() selectedAction=moveItem(config.actions,selectedAction,1); refreshActions() end)
+button(macroPage,"Run",UDim2.new(0,0,0,434),UDim2.new(0.24,-5,0,33),startGuide,"primary")
+button(macroPage,"Pause",UDim2.new(0.25,0,0,434),UDim2.new(0.24,-5,0,33),pauseGuide)
+button(macroPage,"Resume",UDim2.new(0.5,0,0,434),UDim2.new(0.24,-5,0,33),resumeGuide)
+button(macroPage,"Stop",UDim2.new(0.75,0,0,434),UDim2.new(0.25,-5,0,33),function() stopGuide() end,"danger")
+local profileLabel=label(macroPage,"",13,C.text,UDim2.fromOffset(0,487),UDim2.new(1,0,0,24))
+local persistenceLabel=label(macroPage,"Profiles autosave locally in this client session. Export JSON before leaving Roblox.",10,C.muted,UDim2.fromOffset(0,517),UDim2.new(1,0,0,31)); persistenceLabel.TextWrapped=true
+function refreshProfiles() profileLabel.Text="CONFIGURATION  /  "..activeProfile.."   ("..#profiles.." / 12 session profiles)" end
+local function profilePicker(title,fn)
+    assert(#profiles>0,"Save a named profile first")
+    local box=modalBase(title,380)
+    local list=make("ScrollingFrame",{Position=UDim2.fromOffset(22,63),Size=UDim2.new(1,-44,1,-85),CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=3,BorderSizePixel=0,BackgroundTransparency=1,ZIndex=22},box)
+    for i,p in ipairs(profiles) do
+        local b=button(list,p.name,UDim2.fromOffset(0,(i-1)*42),UDim2.new(1,-8,0,34),function() closeModal(); fn(i) end)
+        b.ZIndex=22
+    end
+end
+local function replaceConfig(nextConfig,labelText)
+    local valid=validateConfig(nextConfig)
+    stopGuide("Guide cancelled before loading a configuration")
+    pickTarget=nil; config=valid; selectedUnit=1; selectedAction=1
+    refreshAll(); changed(); log("CONFIG",labelText)
+end
+button(macroPage,"Save profile",UDim2.new(0,0,0,560),UDim2.new(0.32,-5,0,32),function()
+    prompt("Save a session profile",activeProfile,function(raw)
+        local name=trim(raw); text(name,60,"Profile name",false)
+        local index
+        for i,p in ipairs(profiles) do if p.name==name then index=i end end
+        assert(index or #profiles<12,"At most 12 profiles; delete one first")
+        local candidate=copy(profiles)
+        candidate[index or #candidate+1]={name=name,config=validateConfig(config)}
+        assert(#HttpService:JSONEncode({config=config,profiles=candidate,activeProfile=name})<=120000,"Profiles exceed 120 KB; reduce their size")
+        profiles=candidate; activeProfile=name; saveLocal(); refreshProfiles(); log("CONFIG","Saved local session profile: "..name)
+        notify("Profile saved","Session-local. Export JSON to keep it after leaving.")
+    end)
+end,"primary")
+button(macroPage,"Load profile",UDim2.new(0.34,0,0,560),UDim2.new(0.32,-5,0,32),function()
+    profilePicker("Load a profile",function(i)
+        local p=profiles[i]; assert(p,"Profile no longer exists")
+        replaceConfig(p.config,"Loaded profile: "..p.name); activeProfile=p.name; refreshProfiles(); changed()
+    end)
+end)
+button(macroPage,"Rename",UDim2.new(0.68,0,0,560),UDim2.new(0.32,0,0,32),function()
+    profilePicker("Choose a profile to rename",function(i)
+        local p=profiles[i]
+        prompt("Rename profile",p.name,function(raw)
+            local name=trim(raw); text(name,60,"Profile name",false)
+            for j,other in ipairs(profiles) do assert(j==i or other.name~=name,"That profile name already exists") end
+            if activeProfile==p.name then activeProfile=name end
+            p.name=name; saveLocal(); refreshProfiles(); log("CONFIG","Renamed profile to "..name)
+        end)
+    end)
+end)
+button(macroPage,"Export JSON",UDim2.new(0,0,0,603),UDim2.new(0.32,-5,0,32),function()
+    validateConfig(config)
+    jsonDialog("Export configuration JSON",HttpService:JSONEncode(config))
+    log("CONFIG","Opened export of current configuration")
+end)
+button(macroPage,"Import JSON",UDim2.new(0.34,0,0,603),UDim2.new(0.32,-5,0,32),function()
+    jsonDialog("Import configuration JSON","",function(raw)
+        assert(#raw>0 and #raw<=120000,"Import must contain 1..120000 bytes")
+        local decoded=HttpService:JSONDecode(raw)
+        replaceConfig(decoded,"Imported validated JSON configuration")
+        notify("Configuration imported","Settings and plans applied. Active guide was cancelled.")
+    end)
+end)
+button(macroPage,"Delete profile",UDim2.new(0.68,0,0,603),UDim2.new(0.32,0,0,32),function()
+    profilePicker("Choose a profile to delete",function(i)
+        local p=profiles[i]
+        prompt("Type DELETE to remove "..p.name,"",function(raw)
+            assert(trim(raw)=="DELETE","Type DELETE exactly to confirm")
+            table.remove(profiles,i); saveLocal(); refreshProfiles(); log("CONFIG","Deleted session profile: "..p.name)
+        end)
+    end)
+end,"danger")
 
--- Hairline highlight along the top lip of the panel.
-local hairline = new("Frame", {
-	Size = UDim2.new(0.82, 0, 0, 1),
-	Position = UDim2.fromScale(0.5, 0),
-	AnchorPoint = Vector2.new(0.5, 0),
-	BackgroundColor3 = Theme.Moon,
-	BorderSizePixel = 0,
-}, panel)
-gradient(hairline, {
-	ColorSequenceKeypoint.new(0, Theme.Moon),
-	ColorSequenceKeypoint.new(1, Theme.Moon),
-}, 0, feather(0.45, 1))
+-- SETTINGS: immediate effects and real key capture --------------------------
+local settingsPage=newPage("SETTINGS","Make the winter your own.","Every setting below applies immediately. Session-local autosave is separate from JSON export.")
+local settingsControls={}
+local captureKey=nil
+local function settingRow(y,title,description)
+    local row=make("Frame",{Position=UDim2.fromOffset(0,y),Size=UDim2.new(1,0,0,62),BackgroundColor3=C.panel,BorderSizePixel=0},settingsPage)
+    corner(row,10)
+    label(row,title,13,C.text,UDim2.fromOffset(15,7),UDim2.new(1,-215,0,23))
+    local d=label(row,description,10,C.muted,UDim2.fromOffset(15,33),UDim2.new(1,-215,0,22)); d.TextWrapped=true
+    return row
+end
+local scaleRow=settingRow(86,"UI scale","Clamped to fit the current screen.")
+local scaleDisplay=label(scaleRow,"1.00",12,C.text,UDim2.new(1,-141,0,18),UDim2.fromOffset(64,26)); scaleDisplay.TextXAlignment=Enum.TextXAlignment.Center
+button(scaleRow,"−",UDim2.new(1,-181,0,15),UDim2.fromOffset(34,31),function() config.settings.uiScale=clamp(math.floor((config.settings.uiScale-0.05)*100+0.5)/100,0.75,1.4); resize(); refreshSettings(); changed() end)
+button(scaleRow,"+",UDim2.new(1,-71,0,15),UDim2.fromOffset(34,31),function() config.settings.uiScale=clamp(math.floor((config.settings.uiScale+0.05)*100+0.5)/100,0.75,1.4); resize(); refreshSettings(); changed() end)
+local themeRow=make("Frame",{Position=UDim2.fromOffset(0,158),Size=UDim2.new(1,0,0,128),BackgroundColor3=C.panel,BorderSizePixel=0},settingsPage)
+corner(themeRow,13); stroke(themeRow,C.line,0.65)
+label(themeRow,"Choose your winter",14,C.text,UDim2.fromOffset(17,10),UDim2.new(1,-34,0,24))
+label(themeRow,"Three distinct palettes. Changes apply to the whole workspace.",10,C.muted,UDim2.fromOffset(17,36),UDim2.new(1,-34,0,22)).TextWrapped=true
+settingsControls.theme={}
+for i,name in ipairs({"Frost","Aurora","Gold"}) do
+    local choice=button(themeRow,name,UDim2.new((i-1)/3,12,0,69),UDim2.new(1/3,-24,0,43),function()
+        config.settings.theme=name
+        paletteClock=0
+        applyTheme(); refreshUnits(); refreshActions(); refreshSettings(); changed()
+        log("SYSTEM","Applied winter palette: "..name)
+    end)
+    local gradient=choice:FindFirstChild("UIGradient"); if gradient then gradient:Destroy() end
+    settingsControls.theme[name]=choice
+end
+local function toggleSetting(key,y,title,description)
+    local row=settingRow(y,title,description)
+    settingsControls[key]=button(row,"",UDim2.new(1,-181,0,15),UDim2.fromOffset(144,31),function()
+        config.settings[key]=not config.settings[key]
+        refreshSettings(); changed(); log("SYSTEM",title..": "..tostring(config.settings[key]))
+    end)
+end
+toggleSetting("autoSave",300,"Local autosave","Player attribute; this client session only.")
+local function keySetting(key,y,title)
+    local row=settingRow(y,title,"Press a key after selecting; Escape cancels.")
+    settingsControls[key]=button(row,"",UDim2.new(1,-181,0,15),UDim2.fromOffset(144,31),function()
+        captureKey=key
+        settingsControls[key].Text="PRESS A KEY…"
+        notify("Choose a hotkey","Press a key. Escape cancels. Text-entry keys are restricted.")
+    end)
+end
+keySetting("toggleKey",372,"Show / hide hotkey")
+keySetting("stopKey",444,"Immediate stop hotkey")
+button(settingsPage,"Save local settings now",UDim2.new(0,0,0,521),UDim2.new(0.49,-4,0,34),function() saveLocal(); log("CONFIG","Saved local settings manually"); notify("Settings saved","Stored in this client session. Export JSON for later visits.") end,"primary")
+button(settingsPage,"Restore defaults",UDim2.new(0.5,0,0,521),UDim2.new(0.5,0,0,34),function()
+    prompt("Restore all settings and plans? Type RESET","",function(raw)
+        assert(trim(raw)=="RESET","Type RESET exactly to confirm")
+        replaceConfig(defaults,"Restored default settings and plans")
+    end)
+end,"danger")
+function refreshSettings()
+    scaleDisplay.Text=string.format("%.2f",config.settings.uiScale)
+    for name,b in pairs(settingsControls.theme) do
+        local selected=name==config.settings.theme
+        b.BackgroundColor3=selected and THEMES[name].surfaces.card or THEMES[name].surfaces.panel
+        b.TextColor3=C.text
+        local outline=b:FindFirstChild("UIStroke")
+        if outline then outline.Color=THEMES[name].accent; outline.Transparency=selected and 0 or 0.5; outline.Thickness=selected and 1.5 or 1 end
+    end
+    for _,key in ipairs({"autoSave"}) do
+        settingsControls[key].Text=config.settings[key] and "ON" or "OFF"
+        settingsControls[key].TextColor3=C.text
+    end
+    for _,key in ipairs({"toggleKey","stopKey"}) do settingsControls[key].Text=captureKey==key and "PRESS A KEY…" or config.settings[key] end
+    keyFoot.Text=config.settings.toggleKey.." · show/hide\n"..config.settings.stopKey.." · stop guide"
+end
 
--- ============================================================================
--- 5 · BRAND HEADER
--- ============================================================================
-local header = new("Frame", {
-	Size = UDim2.new(1, -28, 0, 22),
-	Position = UDim2.fromOffset(14, 13),
-	BackgroundTransparency = 1,
-}, panel)
+-- LOGS ---------------------------------------------------------------------
+local logsPage=newPage("LOGS","Real events. Clear context.","Bounded to the latest 180 events. Error count is cumulative for this session.")
+local filterButton
+local filters={"ALL","SYSTEM","CONFIG","UNIT","MACRO","GUIDE","ACTION","WARNING","ERROR"}
+filterButton=button(logsPage,"Filter: ALL",UDim2.fromOffset(0,86),UDim2.new(0.49,-4,0,32),function()
+    local i=table.find(filters,logFilter) or 1; logFilter=filters[i%#filters+1]
+    filterButton.Text="Filter: "..logFilter; refreshLogs()
+end)
+button(logsPage,"Clear logs",UDim2.new(0.5,0,0,86),UDim2.new(0.5,0,0,32),function() logs={}; log("SYSTEM","Log display cleared; cumulative error count retained") end)
+local logList=listPanel(logsPage,131,335)
+function refreshLogs()
+    logsDirty=false
+    clearList(logList); local index=0
+    for i=#logs,1,-1 do
+        local entry=logs[i]
+        if logFilter=="ALL" or entry.category==logFilter then
+            local row=make("Frame",{Position=UDim2.fromOffset(10,8+index*64),Size=UDim2.new(1,-26,0,57),BackgroundTransparency=1},logList)
+            label(row,entry.time.."  /  "..entry.category,10,entry.category=="ERROR" and C.error or C.muted,UDim2.new(),UDim2.new(1,0,0,19))
+            local body=label(row,entry.message,11,C.text,UDim2.fromOffset(0,21),UDim2.new(1,0,0,33)); body.TextWrapped=true; body.TextTruncate=Enum.TextTruncate.AtEnd; body.TextYAlignment=Enum.TextYAlignment.Top
+            index+=1
+        end
+    end
+    if index==0 then emptyList(logList,"No events match the current filter.") end
+end
+button(logsPage,"Export visible log entries",UDim2.fromOffset(0,483),UDim2.new(1,0,0,35),function()
+    local rows={}
+    for _,entry in ipairs(logs) do if logFilter=="ALL" or entry.category==logFilter then rows[#rows+1]=entry.time.." ["..entry.category.."] "..entry.message end end
+    jsonDialog("Export logs — plain text",table.concat(rows,"\n"))
+end,"primary")
+local logFoot=label(logsPage,"Logs are local and contain no network requests or private game state.",11,C.muted,UDim2.fromOffset(0,531),UDim2.new(1,0,0,35)); logFoot.TextWrapped=true
 
-local moonGlyph = new("Frame", {
-	Size = UDim2.fromOffset(11, 11),
-	Position = UDim2.fromScale(0, 0.5),
-	AnchorPoint = Vector2.new(0, 0.5),
-	BackgroundColor3 = Theme.Moon,
-	BorderSizePixel = 0,
-}, header)
-round(moonGlyph)
-gradient(moonGlyph, {
-	ColorSequenceKeypoint.new(0, Theme.Moon),
-	ColorSequenceKeypoint.new(1, Theme.Lilac),
-}, 60)
-
--- The bite out of the crescent: a panel-coloured disc offset over the moon.
-local crescentCut = new("Frame", {
-	Size = UDim2.fromOffset(8, 8),
-	Position = UDim2.fromScale(0.72, 0.28),
-	BackgroundColor3 = Color3.fromRGB(26, 22, 47),
-	BorderSizePixel = 0,
-}, moonGlyph)
-round(crescentCut)
-
-local wordmark = new("TextLabel", {
-	Size = UDim2.new(0, 200, 1, 0),
-	Position = UDim2.fromOffset(19, 0),
-	BackgroundTransparency = 1,
-	Text = "lunar elysium",
-	Font = Enum.Font.GothamBold,
-	TextSize = 12,
-	TextColor3 = Theme.Moon,
-	TextXAlignment = Enum.TextXAlignment.Left,
-}, header)
-local wordmarkGradient = gradient(wordmark, {
-	ColorSequenceKeypoint.new(0.00, Theme.Moon),
-	ColorSequenceKeypoint.new(0.45, Theme.Orchid),
-	ColorSequenceKeypoint.new(0.90, Theme.Aqua),
-	ColorSequenceKeypoint.new(1.00, Theme.Moon),
-}, 0)
-
-local chip = new("Frame", {
-	Size = UDim2.fromOffset(58, 17),
-	Position = UDim2.fromScale(1, 0.5),
-	AnchorPoint = Vector2.new(1, 0.5),
-	BackgroundColor3 = Theme.Violet,
-	BackgroundTransparency = 0.82,
-	BorderSizePixel = 0,
-}, header)
-corner(chip, 6)
-stroke(chip, Theme.Lilac, 1, 0.62)
-
-new("TextLabel", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-	Text = "PREMIUM",
-	Font = Enum.Font.GothamBold,
-	TextSize = 8,
-	TextColor3 = Theme.Lilac,
-}, chip)
-
--- ============================================================================
--- 6 · AVATAR & ORBIT
--- ============================================================================
-local avatarHub = new("Frame", {
-	Size = UDim2.fromOffset(112, 112),
-	Position = UDim2.fromScale(0.5, 0.30),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-}, panel)
-
-local orbitRing = new("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	Position = UDim2.fromScale(0.5, 0.5),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-}, avatarHub)
-round(orbitRing)
-local orbitStroke = stroke(orbitRing, Theme.Lilac, 1, 0.55)
-local orbitGradient = gradient(orbitStroke, {
-	ColorSequenceKeypoint.new(0.0, Theme.Aqua),
-	ColorSequenceKeypoint.new(0.5, Theme.Orchid),
-	ColorSequenceKeypoint.new(1.0, Theme.Aqua),
-}, 0)
-
--- Satellite dot riding the orbit ring.
-local satellite = new("Frame", {
-	Size = UDim2.fromOffset(6, 6),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Theme.Moon,
-	BorderSizePixel = 0,
-}, avatarHub)
-round(satellite)
-stroke(satellite, Theme.Aqua, 2, 0.5)
-
-local avatarFrame = new("Frame", {
-	Size = UDim2.fromOffset(84, 84),
-	Position = UDim2.fromScale(0.5, 0.5),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Color3.fromRGB(28, 24, 50),
-	BorderSizePixel = 0,
-}, avatarHub)
-round(avatarFrame)
-
-local avatarStroke = stroke(avatarFrame, Theme.Orchid, 2, 0.1)
-local avatarStrokeGradient = gradient(avatarStroke, {
-	ColorSequenceKeypoint.new(0.0, Theme.Orchid),
-	ColorSequenceKeypoint.new(0.5, Theme.Aqua),
-	ColorSequenceKeypoint.new(1.0, Theme.Orchid),
-}, 0)
-
-local avatarImage = new("ImageLabel", {
-	Size = UDim2.fromScale(0.9, 0.9),
-	Position = UDim2.fromScale(0.5, 0.5),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	ImageTransparency = 1,
-}, avatarFrame)
-round(avatarImage)
-
-task.spawn(function()
-	local ok, thumbnail = pcall(function()
-		return Players:GetUserThumbnailAsync(
-			player.UserId,
-			Enum.ThumbnailType.HeadShot,
-			Enum.ThumbnailSize.Size150x150
-		)
-	end)
-	if ok and thumbnail then
-		avatarImage.Image = thumbnail
-		tween(avatarImage, 0.6, { ImageTransparency = 0 }, Enum.EasingStyle.Sine)
-	end
+-- Layout, dragging, visibility and theme ------------------------------------
+local cameraConnection=nil
+local drag=nil
+local compact=false
+local function viewport()
+    local camera=Workspace.CurrentCamera
+    local full=camera and camera.ViewportSize or Vector2.new(1280,720)
+    local insetA,insetB=game:GetService("GuiService"):GetGuiInset()
+    return Vector2.new(math.max(200,full.X-insetA.X-insetB.X),math.max(200,full.Y-insetA.Y-insetB.Y))
+end
+local function fitPosition()
+    local vp=viewport(); local size=root.AbsoluteSize
+    local cx=root.Position.X.Scale*vp.X+root.Position.X.Offset
+    local cy=root.Position.Y.Scale*vp.Y+root.Position.Y.Offset
+    local x=clamp(cx,size.X/2+6,math.max(size.X/2+6,vp.X-size.X/2-6))
+    local y=clamp(cy,size.Y/2+6,math.max(size.Y/2+6,vp.Y-size.Y/2-6))
+    root.Position=UDim2.fromOffset(x,y)
+end
+function resize()
+    local vp=viewport()
+    local desired=config.settings.uiScale
+    local w=clamp(vp.X/desired-32,620,1000)
+    local h=clamp(vp.Y/desired-32,440,690)
+    local effective=math.min(desired,(vp.X-20)/w,(vp.Y-20)/h)
+    uiScale.Scale=math.max(0.2,effective)
+    root.Size=UDim2.fromOffset(w,minimized and 64 or h)
+    content.Visible=not minimized
+    compact=vp.X<740
+    sidebar.Visible=not compact
+    pageHost.Position=UDim2.fromOffset(compact and 18 or 216,20)
+    pageHost.Size=UDim2.new(1,compact and -36 or -238,1,-40)
+    statePill.Visible=not compact
+    fitPosition()
+end
+function applyTheme()
+    local selected=THEMES[config.settings.theme]
+    for role,color in pairs(selected.surfaces) do C[role]=color end
+    for i=#surfaceBindings,1,-1 do
+        local binding=surfaceBindings[i]
+        if binding.item.Parent then binding.item[binding.property]=C[binding.role]
+        else table.remove(surfaceBindings,i) end
+    end
+    for i=#themeBindings,1,-1 do
+        local b=themeBindings[i]
+        if b.item.Parent then b.item[b.property]=THEMES[config.settings.theme][b.secondary and "secondary" or "accent"]
+        else table.remove(themeBindings,i) end
+    end
+    setHeroGradient(); updatePalette(paletteClock); switchPage(currentPage)
+    for _,anchor in ipairs(markers) do
+        if anchor.Parent then
+            for _,obj in ipairs(anchor:GetDescendants()) do
+                if obj:IsA("TextLabel") then obj.TextColor3=THEMES[config.settings.theme].accent
+                elseif obj:IsA("UIStroke") then obj.Color=THEMES[config.settings.theme].accent end
+            end
+        end
+    end
+end
+function refreshAll()
+    applyTheme(); refreshUnits(); refreshActions(); refreshSettings(); refreshProfiles(); refreshLogs(); updateHome(); resize()
+end
+button(top,"≡",UDim2.new(1,-122,0,19),UDim2.fromOffset(28,28),function()
+    local box=modalBase("Navigate SOLARA",355)
+    for i,name in ipairs(pageNames) do
+        local b=button(box,name,UDim2.fromOffset(22,63+(i-1)*43),UDim2.new(1,-44,0,34),function() closeModal(); switchPage(name) end)
+        b.ZIndex=22
+    end
+end)
+button(top,"−",UDim2.new(1,-82,0,19),UDim2.fromOffset(28,28),function()
+    minimized=not minimized; closeModal(); resize(); log("SYSTEM",minimized and "Window minimized; guide state retained" or "Window restored")
+end)
+local cleanup
+button(top,"X",UDim2.new(1,-42,0,19),UDim2.fromOffset(28,28),function() cleanup() end)
+connect(top.InputBegan,function(input)
+    if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
+    if modal then return end
+    local objects=playerGui:GetGuiObjectsAtPosition(input.Position.X,input.Position.Y)
+    for _,obj in ipairs(objects) do if obj:IsA("GuiButton") and obj:IsDescendantOf(top) then return end end
+    drag={input=input,start=Vector2.new(input.Position.X,input.Position.Y),position=root.Position}
+end)
+connect(UIS.InputChanged,function(input)
+    if not drag then return end
+    if input.UserInputType==Enum.UserInputType.MouseMovement or (input.UserInputType==Enum.UserInputType.Touch and input==drag.input) then
+        local delta=Vector2.new(input.Position.X,input.Position.Y)-drag.start
+        root.Position=UDim2.new(drag.position.X.Scale,drag.position.X.Offset+delta.X,drag.position.Y.Scale,drag.position.Y.Offset+delta.Y)
+        fitPosition()
+    end
+end)
+connect(UIS.InputEnded,function(input)
+    if drag and (input==drag.input or input.UserInputType==Enum.UserInputType.MouseButton1) then drag=nil end
+end)
+local function watchCamera()
+    if cameraConnection then cameraConnection:Disconnect(); connections[cameraConnection]=nil; cameraConnection=nil end
+    local camera=Workspace.CurrentCamera
+    if camera then cameraConnection=connect(camera:GetPropertyChangedSignal("ViewportSize"),protect("Viewport layout",resize)) end
+    resize()
+end
+connect(Workspace:GetPropertyChangedSignal("CurrentCamera"),protect("Camera change",watchCamera))
+connect(player.CharacterRemoving,function()
+    if engine.state=="running" then pauseGuide(); notify("Character reset","Local guide paused. Resume it when ready.") end
+    pickTarget=nil
 end)
 
-local nameLabel = new("TextLabel", {
-	Size = UDim2.new(1, 0, 0, 16),
-	Position = UDim2.fromScale(0.5, 0.52),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	Text = "@" .. player.Name,
-	Font = Enum.Font.GothamMedium,
-	TextSize = 11,
-	TextColor3 = Theme.Moon,
-	TextTransparency = 0.25,
-}, panel)
+-- Input dispatcher: one connection; respects text input and UI ownership ----
+connect(UIS.InputBegan,protect("Input",function(input,processed)
+    if input.UserInputType==Enum.UserInputType.Keyboard then
+        if captureKey then
+            local chosen=input.KeyCode.Name
+            if chosen=="Escape" then captureKey=nil; refreshSettings(); return end
+            local key=captureKey
+            keyName(chosen)
+            assert(chosen~=config.settings[key=="toggleKey" and "stopKey" or "toggleKey"],"That key is assigned to the other hotkey")
+            config.settings[key]=chosen; captureKey=nil; refreshSettings(); changed(); log("SYSTEM","Rebound "..key.." to "..chosen)
+            return
+        end
+        if input.KeyCode.Name==config.settings.stopKey then
+            stopGuide("Immediate stop hotkey; pending actions cancelled")
+            pickTarget=nil; notify("Guide stopped","No pending guide actions remain."); return
+        end
+        if input.KeyCode==Enum.KeyCode.Escape then
+            if pickTarget then pickTarget=nil; notify("Picker cancelled","Unit coordinates were kept.") end
+            if modal then closeModal() end
+            return
+        end
+        if UIS:GetFocusedTextBox() or processed then return end
+        if input.KeyCode.Name==config.settings.toggleKey then
+            root.Visible=not root.Visible; drag=nil
+            if not root.Visible then closeModal(); pickTarget=nil end
+        end
+        return
+    end
+    if not pickTarget or processed then return end
+    if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
+    local pos=Vector2.new(input.Position.X,input.Position.Y)
+    for _,obj in ipairs(playerGui:GetGuiObjectsAtPosition(pos.X,pos.Y)) do
+        if obj:IsDescendantOf(root) or obj:IsDescendantOf(toastHost) then return end
+    end
+    local camera=Workspace.CurrentCamera; assert(camera,"No active camera for raycast")
+    local inset=game:GetService("GuiService"):GetGuiInset()
+    local ray=camera:ViewportPointToRay(pos.X-inset.X,pos.Y-inset.Y)
+    local params=RaycastParams.new()
+    params.FilterType=Enum.RaycastFilterType.Exclude
+    local excluded={markerFolder}; if player.Character then excluded[#excluded+1]=player.Character end
+    params.FilterDescendantsInstances=excluded
+    local result=Workspace:Raycast(ray.Origin,ray.Direction*2000,params)
+    if not result then notify("No geometry hit","Click a visible surface, or enter coordinates in the editor."); return end
+    local u=pickTarget; pickTarget=nil
+    assert(table.find(config.units,u),"The selected unit was removed")
+    u.x,u.y,u.z=result.Position.X,result.Position.Y,result.Position.Z
+    refreshUnits(); changed(); log("UNIT",string.format("Picked %s position: %.1f, %.1f, %.1f",u.name,u.x,u.y,u.z))
+    notify("Position saved",u.name.." now uses the selected world position.")
+end))
 
--- ============================================================================
--- 7 · TYPOGRAPHY
--- ============================================================================
-local warningLabel = new("TextLabel", {
-	Size = UDim2.new(0.84, 0, 0, 28),
-	Position = UDim2.fromScale(0.5, 0.605),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	Text = "PLEASE WAIT UNTIL LOADING COMPLETES TO RUN THE SCRIPT",
-	Font = Enum.Font.GothamBlack,
-	TextSize = 11,
-	TextColor3 = Theme.Gold,
-	TextWrapped = true,
-	LineHeight = 1.15,
-}, panel)
-local warningStroke = stroke(warningLabel, Color3.fromRGB(0, 0, 0), 1.6, 0.45)
-warningStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-
-local statusRow = new("Frame", {
-	Size = UDim2.new(0.84, 0, 0, 14),
-	Position = UDim2.fromScale(0.5, 0.70),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-}, panel)
-
-local statusLabel = new("TextLabel", {
-	Size = UDim2.new(0.75, 0, 1, 0),
-	BackgroundTransparency = 1,
-	Text = "Aligning lunar constellations...",
-	Font = Enum.Font.GothamMedium,
-	TextSize = 10,
-	TextColor3 = Theme.Muted,
-	TextXAlignment = Enum.TextXAlignment.Left,
-	TextTruncate = Enum.TextTruncate.AtEnd,
-}, statusRow)
-
-local percentLabel = new("TextLabel", {
-	Size = UDim2.new(0.25, 0, 1, 0),
-	Position = UDim2.fromScale(1, 0),
-	AnchorPoint = Vector2.new(1, 0),
-	BackgroundTransparency = 1,
-	Text = "0%",
-	Font = Enum.Font.Code,
-	TextSize = 13,
-	TextColor3 = Theme.Aqua,
-	TextXAlignment = Enum.TextXAlignment.Right,
-}, statusRow)
-
--- ============================================================================
--- 8 · PROGRESS BAR
--- ============================================================================
-local barTrack = new("Frame", {
-	Size = UDim2.new(0.84, 0, 0, 6),
-	Position = UDim2.fromScale(0.5, 0.775),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Color3.fromRGB(30, 27, 52),
-	BorderSizePixel = 0,
-}, panel)
-round(barTrack)
-stroke(barTrack, Theme.Lilac, 1, 0.85)
-
-local barFill = new("Frame", {
-	Size = UDim2.new(0, 0, 1, 0),
-	BackgroundColor3 = Theme.Orchid,
-	BorderSizePixel = 0,
-	ClipsDescendants = true,
-}, barTrack)
-round(barFill)
-local barFillGradient = gradient(barFill, {
-	ColorSequenceKeypoint.new(0.0, Theme.Violet),
-	ColorSequenceKeypoint.new(0.5, Theme.Orchid),
-	ColorSequenceKeypoint.new(1.0, Theme.Aqua),
-}, 0)
-
--- Travelling highlight inside the fill.
-local barShimmer = new("Frame", {
-	Size = UDim2.new(0, 46, 1, 0),
-	Position = UDim2.new(-0.5, 0, 0, 0),
-	BackgroundColor3 = Theme.Moon,
-	BorderSizePixel = 0,
-}, barFill)
-gradient(barShimmer, {
-	ColorSequenceKeypoint.new(0, Theme.Moon),
-	ColorSequenceKeypoint.new(1, Theme.Moon),
-}, 0, feather(0.55, 1))
-
-task.spawn(function()
-	while barShimmer.Parent do
-		barShimmer.Position = UDim2.new(-0.5, 0, 0, 0)
-		tween(barShimmer, 1.5, { Position = UDim2.new(1.1, 0, 0, 0) },
-			Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-		task.wait(2.3)
-	end
-end)
-
--- Glow that rides the leading edge of the fill.
-local barTip = new("Frame", {
-	Size = UDim2.fromOffset(14, 14),
-	Position = UDim2.new(0, 0, 0.5, 0),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Theme.Aqua,
-	BackgroundTransparency = 0.4,
-	BorderSizePixel = 0,
-	Visible = false,
-}, barTrack)
-round(barTip)
-
-local miniLabel = new("TextLabel", {
-	Size = UDim2.new(0.84, 0, 0, 14),
-	Position = UDim2.fromScale(0.5, 0.855),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	Text = "LOADING",
-	Font = Enum.Font.GothamBold,
-	TextSize = 9,
-	TextColor3 = Theme.Lilac,
-	TextTransparency = 0.2,
-}, panel)
-
-local footerLabel = new("TextLabel", {
-	Size = UDim2.new(0.9, 0, 0, 14),
-	Position = UDim2.fromScale(0.5, 0.94),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundTransparency = 1,
-	Text = "Does not support alt accounts",
-	Font = Enum.Font.Code,
-	TextSize = 10,
-	TextColor3 = Theme.Aqua,
-	TextTransparency = 0.25,
-}, panel)
-
--- ============================================================================
--- 9 · ANIMATION DRIVER
--- ============================================================================
-local clockStart = os.clock()
-
-RunService.Heartbeat:Connect(function(delta)
-	local t = os.clock() - clockStart
-
-	if math.random() < 0.07 then
-		spawnMote()
-	end
-
-	-- twinkling stars
-	for _, star in ipairs(stars) do
-		local flicker = (math.sin(t * star.rate + star.phase) + 1) / 2
-		star.frame.BackgroundTransparency = math.clamp(star.base - flicker * 0.35, 0, 1)
-	end
-
-	-- aurora sheets breathing and sliding
-	for _, aurora in ipairs(auroras) do
-		local wave = math.sin(t * aurora.spec.drift * 3 + aurora.phase)
-		aurora.frame.Position = UDim2.fromScale(0.5 + wave * 0.09, aurora.spec.y)
-		aurora.frame.BackgroundTransparency = aurora.spec.alpha - wave * 0.05
-		aurora.frame.Rotation = aurora.frame.Rotation + aurora.spec.drift * delta * 8
-	end
-
-	-- rotating rings and border gradients
-	for _, ring in ipairs(rings) do
-		ring.gradient.Rotation = (ring.gradient.Rotation + ring.speed * delta) % 360
-	end
-
-	baseGradient.Rotation = (baseGradient.Rotation + delta * 3) % 360
-	panelStrokeGradient.Rotation = (panelStrokeGradient.Rotation + delta * 34) % 360
-	avatarStrokeGradient.Rotation = (avatarStrokeGradient.Rotation + delta * 58) % 360
-	orbitGradient.Rotation = (orbitGradient.Rotation - delta * 40) % 360
-	wordmarkGradient.Offset = Vector2.new((t * 0.22) % 2 - 1, 0)
-
-	-- halo pulse
-	local pulse = (math.sin(t * 1.6) + 1) / 2
-	halo.BackgroundTransparency = 0.86 + pulse * 0.09
-	halo.Size = UDim2.fromOffset(450 + pulse * 46, 450 + pulse * 46)
-
-	-- satellite riding the orbit
-	local angle = t * 1.15
-	satellite.Position = UDim2.fromScale(
-		0.5 + math.cos(angle) * 0.5,
-		0.5 + math.sin(angle) * 0.5
-	)
-
-	-- breathing strokes
-	local breathe = (math.sin(t * 2.4) + 1) / 2
-	orbitStroke.Transparency = 0.45 + breathe * 0.3
-	panelStroke.Transparency = 0.24 + breathe * 0.22
-	barTip.BackgroundTransparency = 0.3 + breathe * 0.35
-end)
-
--- ============================================================================
--- 10 · INTRO
--- ============================================================================
-panel.Size = UDim2.fromOffset(PANEL_W - 56, PANEL_H - 42)
-panel.BackgroundTransparency = 1
-tween(panel, 0.75, {
-	Size = UDim2.fromOffset(PANEL_W, PANEL_H),
-	BackgroundTransparency = 0.1,
-})
-
-local introTargets = {
-	{ inst = wordmark,      prop = "TextTransparency", to = 0,    delay = 0.10 },
-	{ inst = nameLabel,     prop = "TextTransparency", to = 0.25, delay = 0.18 },
-	{ inst = warningLabel,  prop = "TextTransparency", to = 0,    delay = 0.26 },
-	{ inst = statusLabel,   prop = "TextTransparency", to = 0,    delay = 0.34 },
-	{ inst = percentLabel,  prop = "TextTransparency", to = 0,    delay = 0.34 },
-	{ inst = miniLabel,     prop = "TextTransparency", to = 0.2,  delay = 0.42 },
-	{ inst = footerLabel,   prop = "TextTransparency", to = 0.25, delay = 0.50 },
-}
-
-for _, target in ipairs(introTargets) do
-	target.inst[target.prop] = 1
-	task.delay(target.delay, function()
-		tween(target.inst, 0.55, { [target.prop] = target.to }, Enum.EasingStyle.Sine)
-	end)
+-- Complete unload / bounded maintenance ------------------------------------
+function cleanup()
+    if not alive then return end
+    stopGuide("SOLARA unloaded")
+    if saveThread then pcall(task.cancel,saveThread); saveThread=nil end
+    if config.settings.autoSave then
+        local ok,err=pcall(saveLocal)
+        if not ok then warn("SOLARA could not save local settings: "..tostring(err)) end
+    end
+    alive=false; pickTarget=nil; captureKey=nil; drag=nil
+    for c in pairs(connections) do c:Disconnect() end; connections={}
+    if markerFolder.Parent then markerFolder:Destroy() end
+    if pageCache.Parent then pageCache:Destroy() end
+    if gui.Parent then gui:Destroy() end
+    logs={}; toastRecords={}; themeBindings={}; surfaceBindings={}; gradientBindings={}; profiles={}
 end
+connect(shutdown.Event,cleanup)
+connect(gui.Destroying,cleanup)
+connect(script.Destroying,cleanup)
 
--- ============================================================================
--- 11 · TIMING · 98% LOCK (3 MINUTES TOTAL)
--- ============================================================================
-local phrases = {
-	"Aligning lunar constellations...",
-	"Decrypting core structural assets...",
-	"Bypassing security network checks...",
-	"Injecting operational system logic...",
-	"Finalizing execution environment...",
-}
+local loading=make("Frame",{Name="Initialization",Size=UDim2.fromScale(1,1),BackgroundColor3=C.bg,BorderSizePixel=0,ZIndex=30},root)
+corner(loading,18)
+local loadingTitle=label(loading,"SOLARA / WINTER",23,C.text,UDim2.new(0.5,-170,0.5,-40),UDim2.fromOffset(340,35)); loadingTitle.TextXAlignment=Enum.TextXAlignment.Center; loadingTitle.ZIndex=31
+local loadingText=label(loading,"Initializing local controls and validated configuration…",12,C.muted,UDim2.new(0.5,-220,0.5,5),UDim2.fromOffset(440,28)); loadingText.TextXAlignment=Enum.TextXAlignment.Center; loadingText.ZIndex=31
+refreshAll(); watchCamera()
+log("SYSTEM","SOLARA Winter initialized with documented LocalScript APIs")
+log("CONFIG","Persistence is local to this client session. Export JSON before leaving.")
+local initialized=false
+local lastMaintenance=0
+connect(RunService.Heartbeat,protect("Frame update",function(dt)
+    if not alive then return end
+    advanceGuide(dt)
+    if not initialized then
+        initialized=true
+        if loading.Parent then loading:Destroy() end
+        notify("Welcome to winter","SOLARA is ready. Open UNIT MANAGER to build your strategy.")
+    end
+    lastMaintenance+=dt
+    if lastMaintenance>=0.5 then
+        lastMaintenance=0; updateHome()
+        if logsDirty and currentPage=="LOGS" and root.Visible then refreshLogs() end
+        local now=os.clock()
+        for i=#toastRecords,1,-1 do
+            local t=toastRecords[i]
+            if not t.Parent or now>=(t:GetAttribute("Expires") or now) then
+                if t.Parent then t:Destroy() end; table.remove(toastRecords,i)
+            end
+        end
+        -- UI destruction disconnects its events; discard their Lua references.
+        for c in pairs(connections) do if not c.Connected then connections[c]=nil end end
+        for i=#themeBindings,1,-1 do if not themeBindings[i].item.Parent then table.remove(themeBindings,i) end end
+        for i=#surfaceBindings,1,-1 do if not surfaceBindings[i].item.Parent then table.remove(surfaceBindings,i) end end
+        for i=#gradientBindings,1,-1 do if not gradientBindings[i].gradient.Parent then table.remove(gradientBindings,i) end end
+    end
+end))
 
-local TARGET_TIME = 105
-local startTime = os.time()
-
-local function setFill(progress, duration)
-	tween(barFill, duration, { Size = UDim2.new(progress, 0, 1, 0) },
-		Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	barTip.Visible = progress > 0.01
-	tween(barTip, duration, { Position = UDim2.new(progress, 0, 0.5, 0) },
-		Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-end
-
-while true do
-	local elapsed = os.time() - startTime
-	local progress = math.clamp(elapsed / TARGET_TIME, 0, 1)
-	local percent = math.floor(progress * 100)
-
-	if percent >= 98 then
-		setFill(0.98, 0.3)
-		percentLabel.Text = "98%"
-		break
-	end
-
-	setFill(progress, 0.5)
-	percentLabel.Text = percent .. "%"
-
-	if percent < 20 then
-		statusLabel.Text = phrases[1]
-	elseif percent < 45 then
-		statusLabel.Text = phrases[2]
-	elseif percent < 65 then
-		statusLabel.Text = phrases[3]
-	elseif percent < 85 then
-		statusLabel.Text = phrases[4]
-	else
-		statusLabel.Text = phrases[5]
-	end
-
-	task.wait(0.5)
-end
-
--- ============================================================================
--- 12 · PERMANENT 98% FREEZE STATE
--- ============================================================================
-statusLabel.Text = "CRITICAL: DECRYPTION STALLED. VERIFYING FRAMEWORK KEYS..."
-statusLabel.TextColor3 = Theme.Rose
-statusLabel.Font = Enum.Font.GothamBold
-statusLabel.TextSize = 9
-
-percentLabel.Text = "98%"
-percentLabel.TextColor3 = Theme.Gold
-
-miniLabel.Text = "STALLED"
-miniLabel.TextColor3 = Theme.Rose
-
--- These two carry a UIGradient, so recolour the gradient, not BackgroundColor3 /
--- Color: the gradient wins and the red state would never show otherwise.
-barFill.BackgroundColor3 = Theme.Rose
-barFillGradient.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0.0, Color3.fromRGB(190, 60, 90)),
-	ColorSequenceKeypoint.new(0.5, Theme.Rose),
-	ColorSequenceKeypoint.new(1.0, Theme.Gold),
-})
-
-barTip.BackgroundColor3 = Theme.Rose
-
-panelStroke.Color = Theme.Rose
-panelStrokeGradient.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0.0, Theme.Rose),
-	ColorSequenceKeypoint.new(0.5, Theme.Gold),
-	ColorSequenceKeypoint.new(1.0, Theme.Rose),
-})
-
--- Warning tint drifts to red and the frozen bar keeps a slow, uneasy pulse.
-tween(warningLabel, 1.2, { TextColor3 = Theme.Rose }, Enum.EasingStyle.Sine)
-
-task.spawn(function()
-	while barFill.Parent do
-		tween(barFill, 1.1, { BackgroundTransparency = 0.35 },
-			Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-		task.wait(1.2)
-		tween(barFill, 1.1, { BackgroundTransparency = 0 },
-			Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-		task.wait(1.2)
-	end
-end)
+-- End of the single-file SOLARA Winter LocalScript.
